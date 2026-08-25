@@ -2,6 +2,54 @@
 
 This Turborepo starter is maintained by the Turborepo core team.
 
+## Local Docker stack
+
+The root Compose project runs the Next.js application, hosted-mode TrueForge,
+Postgres, and Redis. Next.js and TrueForge share the `forty_two` Postgres
+database. TrueForge is built from the pinned `vendor/trueforge` submodule.
+
+Initialize the submodule after cloning:
+
+```sh
+git submodule update --init --recursive
+```
+
+Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD` to a long, unique
+URL-safe local-development password before starting the complete stack. For
+example, `openssl rand -hex 32` produces a value that can also be embedded in
+the web application's `DATABASE_URL`. Compose fails fast when this value is
+missing.
+
+```sh
+cp .env.example .env
+```
+
+Then start the complete stack:
+
+```sh
+docker compose up --build
+```
+
+- Next.js: http://localhost:3000
+- TrueForge UI and API: http://localhost:8790
+- TrueForge health: http://localhost:8790/healthz
+- TrueForge API documentation: http://localhost:8790/api/v1/docs
+- Postgres: `localhost:5432`, database `forty_two`
+
+Stop the stack without deleting persisted data:
+
+```sh
+docker compose down
+```
+
+If an older local `postgres_data` volume was initialized with a different
+password, either update that Postgres role or remove only that development
+volume after `docker compose down`. Removing `forty-two_postgres_data`
+permanently deletes the local database; never do this when its data is needed.
+
+Local ports bind to `127.0.0.1`. Authentication is intentionally disabled in
+this local TrueForge setup, so do not expose it publicly.
+
 ## Using this example
 
 Run the following command:

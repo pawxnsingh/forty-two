@@ -1,0 +1,3 @@
+[submodule "vendor/trueforge"]
+	path = vendor/trueforge
+	url = https://github.com/truefoundry/trueforge.git
