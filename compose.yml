@@ -5,7 +5,7 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-forty_two}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forty_two}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-forty_two}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -48,7 +48,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-forty_two}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forty_two}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-forty_two}
       REDIS_URL: redis://redis:6379
     ports:
@@ -80,20 +80,13 @@ services:
       dockerfile: apps/web/Dockerfile
     command:
       [
-        "pnpm",
-        "--filter",
-        "web",
-        "exec",
-        "next",
-        "dev",
-        "--hostname",
-        "0.0.0.0",
-        "--port",
-        "3000",
+        "sh",
+        "-c",
+        "pnpm install --offline --frozen-lockfile && exec pnpm --filter web exec next dev --hostname 0.0.0.0 --port 3000",
       ]
     environment:
       NODE_ENV: development
-      DATABASE_URL: postgresql://${POSTGRES_USER:-forty_two}:${POSTGRES_PASSWORD:-forty_two}@postgres:5432/${POSTGRES_DB:-forty_two}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-forty_two}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-forty_two}
       TRUEFORGE_INTERNAL_URL: http://trueforge:8790
       NEXT_PUBLIC_TRUEFORGE_URL: ${TRUEFORGE_PUBLIC_BASE_URL:-http://localhost:8790}
       WATCHPACK_POLLING: "true"
@@ -102,6 +95,7 @@ services:
     volumes:
       - .:/workspace
       - web_node_modules:/workspace/node_modules
+      - web_pnpm_store:/pnpm/store
       - web_next_cache:/workspace/apps/web/.next
     depends_on:
       postgres:
@@ -126,4 +120,5 @@ volumes:
   postgres_data:
   redis_data:
   web_node_modules:
+  web_pnpm_store:
   web_next_cache:

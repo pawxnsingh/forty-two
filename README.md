@@ -14,8 +14,17 @@ Initialize the submodule after cloning:
 git submodule update --init --recursive
 ```
 
-Optionally copy `.env.example` to `.env` to override the local defaults, then
-start the complete stack:
+Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD` to a long, unique
+URL-safe local-development password before starting the complete stack. For
+example, `openssl rand -hex 32` produces a value that can also be embedded in
+the web application's `DATABASE_URL`. Compose fails fast when this value is
+missing.
+
+```sh
+cp .env.example .env
+```
+
+Then start the complete stack:
 
 ```sh
 docker compose up --build
@@ -32,6 +41,11 @@ Stop the stack without deleting persisted data:
 ```sh
 docker compose down
 ```
+
+If an older local `postgres_data` volume was initialized with a different
+password, either update that Postgres role or remove only that development
+volume after `docker compose down`. Removing `forty-two_postgres_data`
+permanently deletes the local database; never do this when its data is needed.
 
 Local ports bind to `127.0.0.1`. Authentication is intentionally disabled in
 this local TrueForge setup, so do not expose it publicly.

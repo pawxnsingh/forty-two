@@ -1,27 +1,33 @@
 FROM node:24.19.0-bookworm-slim
 
 ENV PNPM_HOME=/pnpm
+ENV COREPACK_HOME=/corepack
+ENV npm_config_store_dir=/pnpm/store
 ENV PATH=$PNPM_HOME:$PATH
 
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+RUN corepack enable \
+  && mkdir -p /corepack /pnpm/store /workspace \
+  && chown -R node:node /corepack /pnpm /workspace
 
 WORKDIR /workspace
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc turbo.json ./
-COPY apps/web/package.json apps/web/package.json
-COPY apps/docs/package.json apps/docs/package.json
-COPY packages/eslint-config/package.json packages/eslint-config/package.json
-COPY packages/typescript-config/package.json packages/typescript-config/package.json
-COPY packages/ui/package.json packages/ui/package.json
+USER node
+
+RUN corepack prepare pnpm@9.15.9 --activate
+
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc turbo.json ./
+COPY --chown=node:node apps/web/package.json apps/web/package.json
+COPY --chown=node:node apps/docs/package.json apps/docs/package.json
+COPY --chown=node:node packages/eslint-config/package.json packages/eslint-config/package.json
+COPY --chown=node:node packages/typescript-config/package.json packages/typescript-config/package.json
+COPY --chown=node:node packages/ui/package.json packages/ui/package.json
 
 RUN pnpm install --frozen-lockfile
 
-COPY apps ./apps
-COPY packages ./packages
+COPY --chown=node:node apps ./apps
+COPY --chown=node:node packages ./packages
 
-RUN mkdir -p /workspace/apps/web/.next && chown -R node:node /workspace/apps/web/.next
-
-USER node
+RUN mkdir -p /workspace/apps/web/.next
 
 EXPOSE 3000
 
