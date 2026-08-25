@@ -2,6 +2,40 @@
 
 This Turborepo starter is maintained by the Turborepo core team.
 
+## Local Docker stack
+
+The root Compose project runs the Next.js application, hosted-mode TrueForge,
+Postgres, and Redis. Next.js and TrueForge share the `forty_two` Postgres
+database. TrueForge is built from the pinned `vendor/trueforge` submodule.
+
+Initialize the submodule after cloning:
+
+```sh
+git submodule update --init --recursive
+```
+
+Optionally copy `.env.example` to `.env` to override the local defaults, then
+start the complete stack:
+
+```sh
+docker compose up --build
+```
+
+- Next.js: http://localhost:3000
+- TrueForge UI and API: http://localhost:8790
+- TrueForge health: http://localhost:8790/healthz
+- TrueForge API documentation: http://localhost:8790/api/v1/docs
+- Postgres: `localhost:5432`, database `forty_two`
+
+Stop the stack without deleting persisted data:
+
+```sh
+docker compose down
+```
+
+Local ports bind to `127.0.0.1`. Authentication is intentionally disabled in
+this local TrueForge setup, so do not expose it publicly.
+
 ## Using this example
 
 Run the following command:
