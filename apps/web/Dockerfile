@@ -19,6 +19,7 @@ COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tu
 COPY --chown=node:node apps/web/package.json apps/web/package.json
 COPY --chown=node:node apps/docs/package.json apps/docs/package.json
 COPY --chown=node:node packages/eslint-config/package.json packages/eslint-config/package.json
+COPY --chown=node:node packages/data-source/package.json packages/data-source/package.json
 COPY --chown=node:node packages/typescript-config/package.json packages/typescript-config/package.json
 COPY --chown=node:node packages/ui/package.json packages/ui/package.json
 
