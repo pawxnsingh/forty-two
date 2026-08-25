@@ -1,0 +1,35 @@
+{
+  "name": "@forty-two/data-source",
+  "version": "1.0.0",
+  "description": "Data source abstraction layer for multiple database types",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^8.1.1",
+    "mssql": "^11.0.1",
+    "mysql2": "^3.15.2",
+    "node-sql-parser": "^5.3.13",
+    "pg": "^8.16.3",
+    "pg-cursor": "^2.15.3",
+    "snowflake-sdk": "^2.3.1"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/mssql": "^9.1.8",
+    "@types/node": "^24.13.3",
+    "@types/pg": "^8.15.5",
+    "@types/pg-cursor": "^2.7.2"
+  }
+}

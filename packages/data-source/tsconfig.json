@@ -1,0 +1,17 @@
+{
+  "extends": "@repo/typescript-config/base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "tsBuildInfoFile": "dist/.cache/tsbuildinfo.json",
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@/*": ["src/*"],
+      "@/adapters/*": ["src/adapters/*"],
+      "@/introspection/*": ["src/introspection/*"],
+      "@/types/*": ["src/types/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
