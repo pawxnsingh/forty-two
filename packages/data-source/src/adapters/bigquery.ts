@@ -13,6 +13,7 @@ import {
   DataSourceType,
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { resolveQueryTimeout } from "../utils/query-options.js";
 import {
   type AdapterQueryResult,
   BaseAdapter,
@@ -20,6 +21,7 @@ import {
 } from "./base.js";
 import { fixBigQueryTableReferences } from "./helpers/bigquery-sql-fixer.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
+import { convertPositionalPlaceholders } from "./helpers/positional-placeholders.js";
 import {
   getBigQuerySimpleType,
   mapBigQueryType,
@@ -81,6 +83,7 @@ export class BigQueryAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.client) {
@@ -99,12 +102,7 @@ export class BigQueryAdapter extends BaseAdapter {
         useLegacySql: false,
       };
 
-      // Add timeout if specified (default: 60 seconds)
-      if (timeout || timeout === 0) {
-        options.jobTimeoutMs = timeout;
-      } else {
-        options.jobTimeoutMs = 60000; // 60 second default for analytical queries
-      }
+      options.jobTimeoutMs = timeoutMs;
 
       // Apply row limit if specified
       let hasMoreRows = false;
@@ -113,25 +111,20 @@ export class BigQueryAdapter extends BaseAdapter {
         options.maxResults = maxRows + 1;
       }
 
-      // Handle parameterized queries - BigQuery uses named parameters
-      if (params && params.length > 0) {
-        // Convert positional parameters to named parameters
-        let processedSql = fixedSql;
+      // BigQuery uses named parameters, so convert positional placeholders.
+      const parameterValues = params ?? [];
+      const conversion = convertPositionalPlaceholders(
+        fixedSql,
+        parameterValues.length,
+        (index) => `@param${index}`,
+      );
+      options.query = conversion.sql;
+
+      if (parameterValues.length > 0) {
         const namedParams: Record<string, QueryParameter> = {};
-
-        // Replace ? placeholders with @param0, @param1, etc.
-        let paramIndex = 0;
-        processedSql = fixedSql.replace(/\?/g, () => {
-          const paramName = `param${paramIndex}`;
-          const paramValue = params[paramIndex];
-          if (paramValue !== undefined) {
-            namedParams[paramName] = paramValue;
-          }
-          paramIndex++;
-          return `@${paramName}`;
+        parameterValues.forEach((value, index) => {
+          namedParams[`param${index}`] = value;
         });
-
-        options.query = processedSql;
         options.params = namedParams;
       }
 
@@ -261,6 +254,7 @@ export class BigQueryAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.client) {
@@ -274,7 +268,7 @@ export class BigQueryAdapter extends BaseAdapter {
         params?: unknown[];
       } = {
         query: sql,
-        timeoutMs: timeout || 60000,
+        timeoutMs,
       };
 
       if (params && params.length > 0) {

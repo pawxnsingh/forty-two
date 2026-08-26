@@ -11,6 +11,11 @@ import type {
   View,
 } from "../types/introspection.js";
 import { BaseIntrospector } from "./base.js";
+import {
+  quoteIdentifier,
+  quoteQualifiedIdentifier,
+  quoteStringLiteral,
+} from "./sql-quoting.js";
 
 /**
  * PostgreSQL-specific introspector implementation
@@ -111,7 +116,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         "WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')";
 
       if (database) {
-        whereClause += ` AND catalog_name = '${database}'`;
+        whereClause += ` AND catalog_name = ${quoteStringLiteral(database)}`;
       }
 
       const schemasResult = await this.adapter.query(`
@@ -174,11 +179,11 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         "WHERE table_schema NOT IN ('information_schema', 'pg_catalog')";
 
       if (database && schema) {
-        whereClause += ` AND table_catalog = '${database}' AND table_schema = '${schema}'`;
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)} AND table_schema = ${quoteStringLiteral(schema)}`;
       } else if (schema) {
-        whereClause += ` AND table_schema = '${schema}'`;
+        whereClause += ` AND table_schema = ${quoteStringLiteral(schema)}`;
       } else if (database) {
-        whereClause += ` AND table_catalog = '${database}'`;
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
       }
 
       const tablesResult = await this.adapter.query(`
@@ -267,15 +272,15 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         "WHERE table_schema NOT IN ('information_schema', 'pg_catalog')";
 
       if (database && schema && table) {
-        whereClause += ` AND table_catalog = '${database}' AND table_schema = '${schema}' AND table_name = '${table}'`;
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)} AND table_schema = ${quoteStringLiteral(schema)} AND table_name = ${quoteStringLiteral(table)}`;
       } else if (schema && table) {
-        whereClause += ` AND table_schema = '${schema}' AND table_name = '${table}'`;
+        whereClause += ` AND table_schema = ${quoteStringLiteral(schema)} AND table_name = ${quoteStringLiteral(table)}`;
       } else if (schema) {
-        whereClause += ` AND table_schema = '${schema}'`;
+        whereClause += ` AND table_schema = ${quoteStringLiteral(schema)}`;
       } else if (database) {
-        whereClause += ` AND table_catalog = '${database}'`;
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
       } else if (table) {
-        whereClause += ` AND table_name = '${table}'`;
+        whereClause += ` AND table_name = ${quoteStringLiteral(table)}`;
       }
 
       const columnsResult = await this.adapter.query(`
@@ -354,11 +359,11 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         "WHERE table_schema NOT IN ('information_schema', 'pg_catalog')";
 
       if (database && schema) {
-        whereClause += ` AND table_catalog = '${database}' AND table_schema = '${schema}'`;
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)} AND table_schema = ${quoteStringLiteral(schema)}`;
       } else if (schema) {
-        whereClause += ` AND table_schema = '${schema}'`;
+        whereClause += ` AND table_schema = ${quoteStringLiteral(schema)}`;
       } else if (database) {
-        whereClause += ` AND table_catalog = '${database}'`;
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
       }
 
       const viewsResult = await this.adapter.query(`
@@ -399,7 +404,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     const tableStatsResult = await this.adapter.query(`
       SELECT schemaname, relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup
       FROM pg_stat_user_tables
-      WHERE schemaname = '${schema}' AND relname = '${table}'
+      WHERE schemaname = ${quoteStringLiteral(schema)} AND relname = ${quoteStringLiteral(table)}
     `);
 
     const basicStats = tableStatsResult.rows[0];
@@ -447,7 +452,11 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         table,
         columns,
       );
-      const statsResult = await this.adapter.query(statsQuery);
+      const columnLabels = columns.map((column) => column.name);
+      const statsResult = await this.adapter.query(statsQuery, [
+        ...columnLabels,
+        ...columnLabels,
+      ]);
 
       // Parse results - each row represents one column's statistics
       for (const row of statsResult.rows) {
@@ -489,23 +498,27 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     table: string,
     columns: Column[],
   ): string {
-    const fullyQualifiedTable = `${schema}.${table}`;
+    const fullyQualifiedTable = quoteQualifiedIdentifier(
+      [schema, table],
+      "postgresql",
+    );
 
     // Build raw_stats CTE with all column statistics in one scan
     const rawStatsSelects = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
+        const quotedColumn = quoteIdentifier(columnName, "postgresql");
         const isNumeric = this.isNumericType(column.dataType);
         const isDate = this.isDateType(column.dataType);
 
         let selectClause = `
-        COUNT(DISTINCT ${columnName}) AS distinct_count_${this.sanitizeColumnName(columnName)},
-        COUNT(*) - COUNT(${columnName}) AS null_count_${this.sanitizeColumnName(columnName)}`;
+        COUNT(DISTINCT ${quotedColumn}) AS tf_distinct_${index},
+        COUNT(*) - COUNT(${quotedColumn}) AS tf_null_${index}`;
 
         if (isNumeric || isDate) {
           selectClause += `,
-        MIN(${columnName}) AS min_${this.sanitizeColumnName(columnName)},
-        MAX(${columnName}) AS max_${this.sanitizeColumnName(columnName)}`;
+        MIN(${quotedColumn}) AS tf_min_${index},
+        MAX(${quotedColumn}) AS tf_max_${index}`;
         }
 
         return selectClause;
@@ -514,10 +527,12 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
 
     // Build sample_values CTE with UNION ALL for each column
     const sampleValuesUnions = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
+        const quotedColumn = quoteIdentifier(columnName, "postgresql");
+        const columnLabel = `$${index + 1}`;
         return `
-    SELECT '${columnName}' AS column_name,
+    SELECT ${columnLabel} AS column_name,
            string_agg(
                CASE
                    WHEN length(sample_val::text) > 100
@@ -528,9 +543,9 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
                ORDER BY sample_val::text
            ) AS sample_values
     FROM (
-        SELECT DISTINCT ${columnName} AS sample_val
+        SELECT DISTINCT ${quotedColumn} AS sample_val
         FROM sample_data
-        WHERE ${columnName} IS NOT NULL
+        WHERE ${quotedColumn} IS NOT NULL
         LIMIT 20
     ) samples`;
       })
@@ -538,23 +553,23 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
 
     // Build stats CTE with UNION ALL for each column
     const statsUnions = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
-        const sanitizedName = this.sanitizeColumnName(columnName);
+        const columnLabel = `$${columns.length + index + 1}`;
         const isNumeric = this.isNumericType(column.dataType);
         const isDate = this.isDateType(column.dataType);
 
         let minMaxClause = "NULL AS min_value,\n        NULL AS max_value";
         if (isNumeric || isDate) {
-          minMaxClause = `rs.min_${sanitizedName}::text AS min_value,
-        rs.max_${sanitizedName}::text AS max_value`;
+          minMaxClause = `rs.tf_min_${index}::text AS min_value,
+        rs.tf_max_${index}::text AS max_value`;
         }
 
         return `
     SELECT
-        '${columnName}' AS column_name,
-        rs.distinct_count_${sanitizedName} AS distinct_count,
-        rs.null_count_${sanitizedName} AS null_count,
+        ${columnLabel} AS column_name,
+        rs.tf_distinct_${index} AS distinct_count,
+        rs.tf_null_${index} AS null_count,
         ${minMaxClause}
     FROM raw_stats rs`;
       })
@@ -586,16 +601,6 @@ SELECT
 FROM stats s
 LEFT JOIN sample_values sv ON s.column_name = sv.column_name
 ORDER BY s.column_name`;
-  }
-
-  /**
-   * Sanitize column name for use in SQL aliases (replace special characters)
-   */
-  private sanitizeColumnName(columnName: string): string {
-    return columnName
-      .replace(/[^a-zA-Z0-9_]/g, "_")
-      .replace(/^(\d)/, "_$1") // Prefix with _ if starts with number
-      .toLowerCase();
   }
 
   /**

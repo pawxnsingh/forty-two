@@ -7,6 +7,7 @@ import {
   type MySQLCredentials,
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { resolveQueryTimeout } from "../utils/query-options.js";
 import {
   type AdapterQueryResult,
   BaseAdapter,
@@ -100,6 +101,7 @@ export class MySQLAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.connection) {
@@ -107,9 +109,6 @@ export class MySQLAdapter extends BaseAdapter {
     }
 
     try {
-      // Set query timeout if specified (default: 60 seconds)
-      const timeoutMs = timeout || 60000;
-
       // For MySQL, use Promise.race() to implement timeout since mysql2
       // doesn't support per-query timeouts on existing connections
       // MySQL2 with promise connections doesn't support true streaming.
@@ -221,6 +220,7 @@ export class MySQLAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.connection) {
@@ -228,9 +228,6 @@ export class MySQLAdapter extends BaseAdapter {
     }
 
     try {
-      // Set query timeout if specified (default: 60 seconds)
-      const timeoutMs = timeout || 60000;
-
       const [result] = await this.executeWithTimeout(
         this.connection.execute(sql, params),
         timeoutMs,

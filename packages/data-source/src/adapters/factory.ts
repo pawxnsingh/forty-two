@@ -17,9 +17,17 @@ export async function createAdapter(
   const validatedCredentials = toCredentials(credentials);
   const adapter = createAdapterInstance(validatedCredentials);
 
-  // Initialize the adapter with credentials
-  await adapter.initialize(validatedCredentials);
-  return adapter;
+  try {
+    await adapter.initialize(validatedCredentials);
+    return adapter;
+  } catch (error) {
+    try {
+      await adapter.close();
+    } catch {
+      // Preserve the initialization error after making a best-effort cleanup.
+    }
+    throw error;
+  }
 }
 
 /**

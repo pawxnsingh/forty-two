@@ -12,11 +12,35 @@ import type {
   View,
 } from "./types/introspection.js";
 import type { QueryRequest, QueryResult } from "./types/query.js";
+import { resolveQueryTimeout } from "./utils/query-options.js";
 import { checkQueryIsReadOnly } from "./utils/sql-validation.js";
 
 const DEFAULT_MAX_ROWS = 1_000;
 const MAX_ALLOWED_ROWS = 10_000;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9_$-]+$/;
+
+interface AdapterInitialization {
+  version: number;
+  promise: Promise<DatabaseAdapter>;
+}
+
+interface InvalidatedAdapterResources {
+  adapter?: DatabaseAdapter;
+  initialization?: AdapterInitialization;
+}
+
+function resolveMaxRows(maxRows: number | undefined): number {
+  const resolved = maxRows ?? DEFAULT_MAX_ROWS;
+  if (
+    !Number.isFinite(resolved) ||
+    !Number.isInteger(resolved) ||
+    resolved <= 0
+  ) {
+    throw new Error("maxRows must be a positive finite integer");
+  }
+
+  return Math.min(resolved, MAX_ALLOWED_ROWS);
+}
 
 function assertSafeIdentifier(value: string | undefined, label: string): void {
   if (value !== undefined && !SAFE_IDENTIFIER.test(value)) {
@@ -64,7 +88,11 @@ export interface DataSourceManagerConfig {
 export class DataSource {
   private dataSources: Map<string, DataSourceConfig> = new Map();
   private adapters: Map<string, DatabaseAdapter> = new Map();
+  private adapterInitializations: Map<string, AdapterInitialization> =
+    new Map();
+  private dataSourceVersions: Map<string, number> = new Map();
   private config: DataSourceManagerConfig;
+  private closed = false;
 
   constructor(config: DataSourceManagerConfig) {
     this.config = config;
@@ -85,6 +113,7 @@ export class DataSource {
         );
       }
       this.dataSources.set(dataSource.name, dataSource);
+      this.dataSourceVersions.set(dataSource.name, 0);
     }
   }
 
@@ -92,6 +121,8 @@ export class DataSource {
    * Get or create adapter for a data source
    */
   private async getAdapter(dataSourceName: string): Promise<DatabaseAdapter> {
+    this.assertOpen();
+
     const existingAdapter = this.adapters.get(dataSourceName);
     if (existingAdapter) {
       return existingAdapter;
@@ -102,8 +133,46 @@ export class DataSource {
       throw new Error(`Data source '${dataSourceName}' not found`);
     }
 
+    const version = this.dataSourceVersions.get(dataSourceName) ?? 0;
+    const existingInitialization =
+      this.adapterInitializations.get(dataSourceName);
+    if (existingInitialization?.version === version) {
+      return existingInitialization.promise;
+    }
+
+    const promise = this.createAndStoreAdapter(
+      dataSourceName,
+      dataSource,
+      version,
+    );
+    const initialization = { version, promise };
+    this.adapterInitializations.set(dataSourceName, initialization);
+    void promise.then(
+      () => this.clearInitialization(dataSourceName, initialization),
+      () => this.clearInitialization(dataSourceName, initialization),
+    );
+    return promise;
+  }
+
+  private async createAndStoreAdapter(
+    dataSourceName: string,
+    dataSource: DataSourceConfig,
+    version: number,
+  ): Promise<DatabaseAdapter> {
     try {
       const adapter = await createAdapter(dataSource.credentials);
+      const isCurrent =
+        !this.closed &&
+        this.dataSourceVersions.get(dataSourceName) === version &&
+        this.dataSources.get(dataSourceName) === dataSource;
+
+      if (!isCurrent) {
+        await adapter.close();
+        throw new Error(
+          `Data source '${dataSourceName}' changed during adapter initialization`,
+        );
+      }
+
       this.adapters.set(dataSourceName, adapter);
       return adapter;
     } catch (error) {
@@ -113,19 +182,28 @@ export class DataSource {
     }
   }
 
+  private clearInitialization(
+    dataSourceName: string,
+    initialization: AdapterInitialization,
+  ): void {
+    if (this.adapterInitializations.get(dataSourceName) === initialization) {
+      this.adapterInitializations.delete(dataSourceName);
+    }
+  }
+
   /**
    * Execute a query on the specified data source
    */
   async execute<T = Record<string, unknown>>(
     request: QueryRequest,
   ): Promise<QueryResult<T>> {
+    const maxRows = resolveMaxRows(request.options?.maxRows);
+    if (request.options?.timeout !== undefined) {
+      resolveQueryTimeout(request.options.timeout);
+    }
     const dataSourceName = this.resolveDataSource(request);
     const adapter = await this.getAdapter(dataSourceName);
     const startedAt = performance.now();
-    const maxRows = Math.min(
-      Math.max(request.options?.maxRows ?? DEFAULT_MAX_ROWS, 1),
-      MAX_ALLOWED_ROWS,
-    );
     const validation = checkQueryIsReadOnly(
       request.sql,
       adapter.getDataSourceType(),
@@ -463,6 +541,7 @@ export class DataSource {
    * Add a new data source configuration
    */
   async addDataSource(config: DataSourceConfig): Promise<void> {
+    this.assertOpen();
     // Validate that we don't already have a data source with this name
     if (this.dataSources.has(config.name)) {
       throw new Error(`Data source with name '${config.name}' already exists`);
@@ -472,13 +551,18 @@ export class DataSource {
     }
 
     this.dataSources.set(config.name, config);
+    this.dataSourceVersions.set(config.name, 0);
+    const addVersion = 0;
 
     // Test the connection by creating and connecting the adapter
     try {
       await this.getAdapter(config.name);
     } catch (error) {
-      // Remove the data source if connection fails
-      this.dataSources.delete(config.name);
+      // Do not delete a concurrently removed and re-added configuration.
+      if (this.isCurrentConfiguration(config.name, config, addVersion)) {
+        this.dataSources.delete(config.name);
+        this.dataSourceVersions.delete(config.name);
+      }
       throw new Error(
         `Failed to add data source '${config.name}': ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -489,13 +573,10 @@ export class DataSource {
    * Remove a data source
    */
   async removeDataSource(name: string): Promise<void> {
-    const adapter = this.adapters.get(name);
-    if (adapter) {
-      await adapter.close();
-      this.adapters.delete(name);
-    }
-
+    this.assertOpen();
+    const resources = this.invalidateAdapter(name);
     this.dataSources.delete(name);
+    await this.closeInvalidatedResources(resources);
   }
 
   /**
@@ -505,18 +586,10 @@ export class DataSource {
     name: string,
     config: Partial<DataSourceConfig>,
   ): Promise<void> {
+    this.assertOpen();
     const existingConfig = this.dataSources.get(name);
     if (!existingConfig) {
       throw new Error(`Data source '${name}' not found`);
-    }
-
-    // Disconnect existing adapter if credentials or type changed
-    if (config.credentials || config.type) {
-      const adapter = this.adapters.get(name);
-      if (adapter) {
-        await adapter.close();
-        this.adapters.delete(name);
-      }
     }
 
     // Update configuration
@@ -530,19 +603,31 @@ export class DataSource {
       throw new Error("Data source type does not match its credentials");
     }
 
-    this.dataSources.set(name, updatedConfig);
+    if (!config.credentials && !config.type) {
+      this.dataSources.set(name, updatedConfig);
+      return;
+    }
 
-    // Test new configuration if credentials or type changed
-    if (config.credentials || config.type) {
-      try {
-        await this.getAdapter(name);
-      } catch (error) {
-        // Restore original configuration if new one fails
+    const resources = this.invalidateAdapter(name);
+    const updateVersion = this.dataSourceVersions.get(name) ?? 0;
+    this.dataSources.set(name, updatedConfig);
+    await this.closeInvalidatedResources(resources);
+
+    if (!this.isCurrentConfiguration(name, updatedConfig, updateVersion)) {
+      throw new Error(`Data source '${name}' changed during update`);
+    }
+
+    try {
+      await this.getAdapter(name);
+    } catch (error) {
+      if (this.isCurrentConfiguration(name, updatedConfig, updateVersion)) {
+        const failedResources = this.invalidateAdapter(name);
         this.dataSources.set(name, existingConfig);
-        throw new Error(
-          `Failed to update data source '${name}': ${error instanceof Error ? error.message : String(error)}`,
-        );
+        await this.closeInvalidatedResources(failedResources);
       }
+      throw new Error(
+        `Failed to update data source '${name}': ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -550,11 +635,64 @@ export class DataSource {
    * Close all connections
    */
   async close(): Promise<void> {
-    const disconnectPromises = Array.from(this.adapters.values()).map(
-      (adapter) => adapter.close(),
-    );
+    if (this.closed) return;
+    this.closed = true;
 
-    await Promise.all(disconnectPromises);
-    this.adapters.clear();
+    const names = new Set([
+      ...this.dataSources.keys(),
+      ...this.adapters.keys(),
+      ...this.adapterInitializations.keys(),
+    ]);
+    const resources = Array.from(names, (name) => this.invalidateAdapter(name));
+    await Promise.all(
+      resources.map((resource) => this.closeInvalidatedResources(resource)),
+    );
+  }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error("Data source manager is closed");
+    }
+  }
+
+  private invalidateAdapter(name: string): InvalidatedAdapterResources {
+    const version = (this.dataSourceVersions.get(name) ?? 0) + 1;
+    this.dataSourceVersions.set(name, version);
+
+    const adapter = this.adapters.get(name);
+    const initialization = this.adapterInitializations.get(name);
+    this.adapters.delete(name);
+    this.adapterInitializations.delete(name);
+
+    return { adapter, initialization };
+  }
+
+  private async closeInvalidatedResources(
+    resources: InvalidatedAdapterResources,
+  ): Promise<void> {
+    const adapters = new Set<DatabaseAdapter>();
+    if (resources.adapter) adapters.add(resources.adapter);
+
+    if (resources.initialization) {
+      try {
+        adapters.add(await resources.initialization.promise);
+      } catch {
+        // Stale and failed initializations clean up before rejecting.
+      }
+    }
+
+    await Promise.all(Array.from(adapters, (adapter) => adapter.close()));
+  }
+
+  private isCurrentConfiguration(
+    name: string,
+    config: DataSourceConfig,
+    version: number,
+  ): boolean {
+    return (
+      !this.closed &&
+      this.dataSources.get(name) === config &&
+      this.dataSourceVersions.get(name) === version
+    );
   }
 }

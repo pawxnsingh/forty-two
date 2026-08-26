@@ -19,6 +19,12 @@ storage, approvals, audit history, object storage, or MCP transport.
 
 The MCP layer must keep raw adapter methods private and enforce read/write
 permissions, query limits, approval, transaction, and post-write verification.
+Use least-privilege database accounts and engine-native read-only enforcement;
+SQL parsing is an additional guard, not a complete database security boundary.
+
+Query options are runtime-validated before a connection is acquired. `maxRows`
+must be a positive integer and is capped at 10,000. `timeout` must be a positive
+integer in milliseconds no greater than 600,000 (10 minutes).
 
 ## Example
 

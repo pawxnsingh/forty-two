@@ -7,12 +7,14 @@ import {
   type SQLServerCredentials,
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { resolveQueryTimeout } from "../utils/query-options.js";
 import {
   type AdapterQueryResult,
   BaseAdapter,
   type FieldMetadata,
 } from "./base.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
+import { convertPositionalPlaceholders } from "./helpers/positional-placeholders.js";
 
 // Internal types for mssql column metadata that aren't properly exported
 interface ColumnMetadata {
@@ -108,6 +110,7 @@ export class SQLServerAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.pool) {
@@ -117,22 +120,18 @@ export class SQLServerAdapter extends BaseAdapter {
     try {
       const request = this.pool.request();
 
-      // Set query timeout if specified (default: 60 seconds)
-      const timeoutMs = timeout || 60000;
-      let processedQuery = sqlQuery;
+      const parameterValues = params ?? [];
+      const processedQuery = convertPositionalPlaceholders(
+        sqlQuery,
+        parameterValues.length,
+        (index) => `@param${index}`,
+      ).sql;
 
       // Add parameters if provided
-      if (params && params.length > 0) {
-        params.forEach((param, index) => {
+      if (parameterValues.length > 0) {
+        parameterValues.forEach((param, index) => {
           request.input(`param${index}`, param);
         });
-
-        // Replace ? placeholders with @param0, @param1, etc.
-        let paramIndex = 0;
-        processedQuery = processedQuery.replace(
-          /\?/g,
-          () => `@param${paramIndex++}`,
-        );
       }
 
       // If no maxRows specified, use regular query
@@ -297,6 +296,7 @@ export class SQLServerAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.pool) {
@@ -306,19 +306,18 @@ export class SQLServerAdapter extends BaseAdapter {
     try {
       const request = this.pool.request();
 
-      const timeoutMs = timeout || 60000;
-      let processedQuery = sql;
+      const parameterValues = params ?? [];
+      const processedQuery = convertPositionalPlaceholders(
+        sql,
+        parameterValues.length,
+        (index) => `@param${index}`,
+      ).sql;
 
       // Add parameters if provided
-      if (params && params.length > 0) {
-        params.forEach((param, index) => {
+      if (parameterValues.length > 0) {
+        parameterValues.forEach((param, index) => {
           request.input(`param${index}`, param);
         });
-        let paramIndex = 0;
-        processedQuery = processedQuery.replace(
-          /\?/g,
-          () => `@param${paramIndex++}`,
-        );
       }
 
       const result = await this.executeWithTimeout(

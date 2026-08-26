@@ -44,6 +44,50 @@ function getParserDialect(dataSourceSyntax?: string): string {
   return dialect;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasMeaningfulIntoClause(statement: Record<string, unknown>): boolean {
+  const into = statement.into;
+  if (!isRecord(into)) return false;
+
+  return (
+    into.type === "into" ||
+    (into.position !== null && into.position !== undefined) ||
+    (into.keyword !== null && into.keyword !== undefined) ||
+    (into.expr !== null && into.expr !== undefined)
+  );
+}
+
+function findSelectSideEffect(
+  value: unknown,
+): "into" | "locking_read" | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const sideEffect = findSelectSideEffect(item);
+      if (sideEffect) return sideEffect;
+    }
+    return undefined;
+  }
+
+  if (!isRecord(value)) return undefined;
+
+  if (value.type === "select") {
+    if (hasMeaningfulIntoClause(value)) return "into";
+    if (value.locking_read !== null && value.locking_read !== undefined) {
+      return "locking_read";
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const sideEffect = findSelectSideEffect(nestedValue);
+    if (sideEffect) return sideEffect;
+  }
+
+  return undefined;
+}
+
 /**
  * Checks if a SQL query is read-only (SELECT only, no INSERT/UPDATE/DELETE/DDL)
  * @param sql - The SQL query to validate
@@ -116,6 +160,24 @@ export function checkQueryIsReadOnly(
             isReadOnly: false,
             queryType,
             error: `Query type '${queryType.toUpperCase()}' is not allowed. Only SELECT statements are permitted for read-only access.${guidance}`,
+          };
+        }
+
+        const sideEffect = findSelectSideEffect(statement);
+        if (sideEffect === "into") {
+          return {
+            isReadOnly: false,
+            queryType,
+            error:
+              "SELECT statements with INTO clauses are not allowed because they can create tables, write files, or mutate session variables.",
+          };
+        }
+        if (sideEffect === "locking_read") {
+          return {
+            isReadOnly: false,
+            queryType,
+            error:
+              "Locking SELECT statements are not allowed for read-only access.",
           };
         }
       }

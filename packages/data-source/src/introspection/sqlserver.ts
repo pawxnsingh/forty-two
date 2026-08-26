@@ -11,6 +11,11 @@ import type {
   View,
 } from "../types/introspection.js";
 import { BaseIntrospector } from "./base.js";
+import {
+  quoteIdentifier,
+  quoteQualifiedIdentifier,
+  quoteStringLiteral,
+} from "./sql-quoting.js";
 
 /**
  * SQL Server-specific introspector implementation
@@ -169,9 +174,9 @@ export class SQLServerIntrospector extends BaseIntrospector {
       let whereClause = "";
 
       if (database && schema) {
-        whereClause = `WHERE DB_NAME() = '${database}' AND s.name = '${schema}'`;
+        whereClause = `WHERE DB_NAME() = ${quoteStringLiteral(database)} AND s.name = ${quoteStringLiteral(schema)}`;
       } else if (schema) {
-        whereClause = `WHERE s.name = '${schema}'`;
+        whereClause = `WHERE s.name = ${quoteStringLiteral(schema)}`;
       }
 
       const tablesResult = await this.adapter.query(`
@@ -200,17 +205,20 @@ export class SQLServerIntrospector extends BaseIntrospector {
       const tablesWithStats = await Promise.all(
         tables.map(async (table) => {
           try {
-            const tableStatsResult = await this.adapter.query(`
+            const tableStatsResult = await this.adapter.query(
+              `
               SELECT
                 SUM(p.rows) as row_count,
                 SUM(a.total_pages) * 8 * 1024 as size_bytes
               FROM sys.tables t
               INNER JOIN sys.partitions p ON t.object_id = p.object_id
               INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
-              WHERE t.name = '${table.name}'
-                AND SCHEMA_NAME(t.schema_id) = '${table.schema}'
+              WHERE t.name = ?
+                AND SCHEMA_NAME(t.schema_id) = ?
                 AND p.index_id IN (0,1)
-            `);
+            `,
+              [table.name, table.schema],
+            );
 
             const stats = tableStatsResult.rows[0];
             return {
@@ -289,13 +297,13 @@ export class SQLServerIntrospector extends BaseIntrospector {
       let whereClause = "";
 
       if (database && schema && table) {
-        whereClause = `WHERE DB_NAME() = '${database}' AND s.name = '${schema}' AND t.name = '${table}'`;
+        whereClause = `WHERE DB_NAME() = ${quoteStringLiteral(database)} AND s.name = ${quoteStringLiteral(schema)} AND t.name = ${quoteStringLiteral(table)}`;
       } else if (schema && table) {
-        whereClause = `WHERE s.name = '${schema}' AND t.name = '${table}'`;
+        whereClause = `WHERE s.name = ${quoteStringLiteral(schema)} AND t.name = ${quoteStringLiteral(table)}`;
       } else if (schema) {
-        whereClause = `WHERE s.name = '${schema}'`;
+        whereClause = `WHERE s.name = ${quoteStringLiteral(schema)}`;
       } else if (table) {
-        whereClause = `WHERE t.name = '${table}'`;
+        whereClause = `WHERE t.name = ${quoteStringLiteral(table)}`;
       }
 
       const columnsResult = await this.adapter.query(`
@@ -320,13 +328,13 @@ export class SQLServerIntrospector extends BaseIntrospector {
       `);
 
       const columns = columnsResult.rows.map((row) => ({
-        name: this.getString(row.name) || "",
-        table: this.getString(row.table) || "",
-        schema: this.getString(row.schema) || "",
-        database: this.getString(row.database) || "",
+        name: this.getString(row.column_name) || "",
+        table: this.getString(row.table_name) || "",
+        schema: this.getString(row.schema_name) || "",
+        database: this.getString(row.database_name) || "",
         position: this.parseNumber(row.position) || 0,
         dataType: this.getString(row.data_type) || "",
-        isNullable: this.getString(row.is_nullable) === "YES",
+        isNullable: this.parseBoolean(row.is_nullable),
         defaultValue: this.getString(row.default_value) || "",
         maxLength: this.parseNumber(row.max_length) ?? 0,
         precision: this.parseNumber(row.precision) ?? 0,
@@ -377,9 +385,9 @@ export class SQLServerIntrospector extends BaseIntrospector {
       let whereClause = "";
 
       if (database && schema) {
-        whereClause = `WHERE DB_NAME() = '${database}' AND s.name = '${schema}'`;
+        whereClause = `WHERE DB_NAME() = ${quoteStringLiteral(database)} AND s.name = ${quoteStringLiteral(schema)}`;
       } else if (schema) {
-        whereClause = `WHERE s.name = '${schema}'`;
+        whereClause = `WHERE s.name = ${quoteStringLiteral(schema)}`;
       }
 
       const viewsResult = await this.adapter.query(`
@@ -426,8 +434,8 @@ export class SQLServerIntrospector extends BaseIntrospector {
       FROM sys.tables t
       INNER JOIN sys.partitions p ON t.object_id = p.object_id
       INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
-      WHERE t.name = '${table}'
-        AND SCHEMA_NAME(t.schema_id) = '${schema}'
+      WHERE t.name = ${quoteStringLiteral(table)}
+        AND SCHEMA_NAME(t.schema_id) = ${quoteStringLiteral(schema)}
         AND p.index_id IN (0,1)
     `);
 
@@ -477,7 +485,11 @@ export class SQLServerIntrospector extends BaseIntrospector {
         table,
         columns,
       );
-      const statsResult = await this.adapter.query(statsQuery);
+      const columnLabels = columns.map((column) => column.name);
+      const statsResult = await this.adapter.query(statsQuery, [
+        ...columnLabels,
+        ...columnLabels,
+      ]);
 
       // Parse results - each row represents one column's statistics
       for (const row of statsResult.rows) {
@@ -519,23 +531,27 @@ export class SQLServerIntrospector extends BaseIntrospector {
     table: string,
     columns: Column[],
   ): string {
-    const fullyQualifiedTable = `[${schema}].[${table}]`;
+    const fullyQualifiedTable = quoteQualifiedIdentifier(
+      [schema, table],
+      "sqlserver",
+    );
 
     // Build raw_stats CTE with all column statistics in one scan
     const rawStatsSelects = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
+        const quotedColumn = quoteIdentifier(columnName, "sqlserver");
         const isNumeric = this.isNumericType(column.dataType);
         const isDate = this.isDateType(column.dataType);
 
         let selectClause = `
-        COUNT(DISTINCT [${columnName}]) AS distinct_count_${this.sanitizeColumnName(columnName)},
-        SUM(CASE WHEN [${columnName}] IS NULL THEN 1 ELSE 0 END) AS null_count_${this.sanitizeColumnName(columnName)}`;
+        COUNT(DISTINCT ${quotedColumn}) AS tf_distinct_${index},
+        SUM(CASE WHEN ${quotedColumn} IS NULL THEN 1 ELSE 0 END) AS tf_null_${index}`;
 
         if (isNumeric || isDate) {
           selectClause += `,
-        MIN([${columnName}]) AS min_${this.sanitizeColumnName(columnName)},
-        MAX([${columnName}]) AS max_${this.sanitizeColumnName(columnName)}`;
+        MIN(${quotedColumn}) AS tf_min_${index},
+        MAX(${quotedColumn}) AS tf_max_${index}`;
         }
 
         return selectClause;
@@ -546,8 +562,10 @@ export class SQLServerIntrospector extends BaseIntrospector {
     const sampleValuesUnions = columns
       .map((column) => {
         const columnName = column.name;
+        const quotedColumn = quoteIdentifier(columnName, "sqlserver");
+        const columnLabel = "?";
         return `
-    SELECT '${columnName}' AS column_name,
+    SELECT ${columnLabel} AS column_name,
            STRING_AGG(
                CASE
                    WHEN LEN(sample_val) > 100
@@ -557,9 +575,9 @@ export class SQLServerIntrospector extends BaseIntrospector {
                ','
            ) WITHIN GROUP (ORDER BY sample_val) AS sample_values
     FROM (
-        SELECT DISTINCT TOP 20 CAST([${columnName}] AS NVARCHAR(MAX)) AS sample_val
+        SELECT DISTINCT TOP 20 CAST(${quotedColumn} AS NVARCHAR(MAX)) AS sample_val
         FROM sample_data
-        WHERE [${columnName}] IS NOT NULL
+        WHERE ${quotedColumn} IS NOT NULL
         ORDER BY sample_val
     ) samples`;
       })
@@ -567,23 +585,23 @@ export class SQLServerIntrospector extends BaseIntrospector {
 
     // Build stats CTE with UNION ALL for each column
     const statsUnions = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
-        const sanitizedName = this.sanitizeColumnName(columnName);
+        const columnLabel = "?";
         const isNumeric = this.isNumericType(column.dataType);
         const isDate = this.isDateType(column.dataType);
 
         let minMaxClause = "NULL AS min_value,\n        NULL AS max_value";
         if (isNumeric || isDate) {
-          minMaxClause = `CAST(rs.min_${sanitizedName} AS NVARCHAR(MAX)) AS min_value,
-        CAST(rs.max_${sanitizedName} AS NVARCHAR(MAX)) AS max_value`;
+          minMaxClause = `CAST(rs.tf_min_${index} AS NVARCHAR(MAX)) AS min_value,
+        CAST(rs.tf_max_${index} AS NVARCHAR(MAX)) AS max_value`;
         }
 
         return `
     SELECT
-        '${columnName}' AS column_name,
-        rs.distinct_count_${sanitizedName} AS distinct_count,
-        rs.null_count_${sanitizedName} AS null_count,
+        ${columnLabel} AS column_name,
+        rs.tf_distinct_${index} AS distinct_count,
+        rs.tf_null_${index} AS null_count,
         ${minMaxClause}
     FROM raw_stats rs`;
       })
@@ -615,16 +633,6 @@ SELECT
 FROM stats s
 LEFT JOIN sample_values sv ON s.column_name = sv.column_name
 ORDER BY s.column_name`;
-  }
-
-  /**
-   * Sanitize column name for use in SQL aliases (replace special characters)
-   */
-  private sanitizeColumnName(columnName: string): string {
-    return columnName
-      .replace(/[^a-zA-Z0-9_]/g, "_")
-      .replace(/^(\d)/, "_$1") // Prefix with _ if starts with number
-      .toLowerCase();
   }
 
   /**

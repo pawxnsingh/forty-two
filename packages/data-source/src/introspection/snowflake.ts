@@ -11,6 +11,11 @@ import type {
   View,
 } from "../types/introspection.js";
 import { BaseIntrospector } from "./base.js";
+import {
+  quoteIdentifier,
+  quoteQualifiedIdentifier,
+  quoteStringLiteral,
+} from "./sql-quoting.js";
 
 /**
  * Snowflake-specific introspector implementation
@@ -96,7 +101,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         // Fetch schemas for specific database
         const result = await this.adapter.query(`
           SELECT SCHEMA_NAME, CATALOG_NAME, SCHEMA_OWNER, COMMENT, CREATED, LAST_ALTERED
-          FROM ${database}.INFORMATION_SCHEMA.SCHEMATA
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.SCHEMATA
           WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
         `);
 
@@ -115,7 +120,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
           try {
             const result = await this.adapter.query(`
               SELECT SCHEMA_NAME, CATALOG_NAME, SCHEMA_OWNER, COMMENT, CREATED, LAST_ALTERED
-              FROM ${db.name}.INFORMATION_SCHEMA.SCHEMATA
+              FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.SCHEMATA
               WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
             `);
 
@@ -188,8 +193,8 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         const result = await this.adapter.query(`
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                  ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
-          FROM ${database}.INFORMATION_SCHEMA.TABLES
-          WHERE TABLE_SCHEMA = '${schema}'
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = ${quoteStringLiteral(schema)}
         `);
 
         tables = result.rows.map((row) => ({
@@ -208,7 +213,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         const result = await this.adapter.query(`
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                  ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
-          FROM ${database}.INFORMATION_SCHEMA.TABLES
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.TABLES
         `);
 
         tables = result.rows.map((row) => ({
@@ -230,7 +235,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
             const result = await this.adapter.query(`
               SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                      ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
-              FROM ${db.name}.INFORMATION_SCHEMA.TABLES
+              FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.TABLES
             `);
 
             return result.rows.map((row) => ({
@@ -323,8 +328,8 @@ export class SnowflakeIntrospector extends BaseIntrospector {
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME,
                  ORDINAL_POSITION, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                  CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, COMMENT
-          FROM ${database}.INFORMATION_SCHEMA.COLUMNS
-          WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}'
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = ${quoteStringLiteral(schema)} AND TABLE_NAME = ${quoteStringLiteral(table)}
           ORDER BY ORDINAL_POSITION
         `);
 
@@ -348,8 +353,8 @@ export class SnowflakeIntrospector extends BaseIntrospector {
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME,
                  ORDINAL_POSITION, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                  CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, COMMENT
-          FROM ${database}.INFORMATION_SCHEMA.COLUMNS
-          WHERE TABLE_SCHEMA = '${schema}'
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = ${quoteStringLiteral(schema)}
           ORDER BY TABLE_NAME, ORDINAL_POSITION
         `);
 
@@ -373,7 +378,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME,
                  ORDINAL_POSITION, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                  CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, COMMENT
-          FROM ${database}.INFORMATION_SCHEMA.COLUMNS
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.COLUMNS
           ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
         `);
 
@@ -400,7 +405,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
               SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME,
                      ORDINAL_POSITION, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                      CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, COMMENT
-              FROM ${db.name}.INFORMATION_SCHEMA.COLUMNS
+              FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.COLUMNS
               ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
             `);
 
@@ -478,8 +483,8 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         // Fetch views for specific database and schema
         const result = await this.adapter.query(`
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, VIEW_DEFINITION, COMMENT
-          FROM ${database}.INFORMATION_SCHEMA.VIEWS
-          WHERE TABLE_SCHEMA = '${schema}'
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.VIEWS
+          WHERE TABLE_SCHEMA = ${quoteStringLiteral(schema)}
         `);
 
         views = result.rows.map((row) => ({
@@ -493,7 +498,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         // Fetch views for specific database
         const result = await this.adapter.query(`
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, VIEW_DEFINITION, COMMENT
-          FROM ${database}.INFORMATION_SCHEMA.VIEWS
+          FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.VIEWS
         `);
 
         views = result.rows.map((row) => ({
@@ -510,7 +515,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
           try {
             const result = await this.adapter.query(`
               SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, VIEW_DEFINITION, COMMENT
-              FROM ${db.name}.INFORMATION_SCHEMA.VIEWS
+              FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.VIEWS
             `);
 
             return result.rows.map((row) => ({
@@ -553,10 +558,10 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     // Get basic table statistics only (no column statistics)
     const tableInfo = await this.adapter.query(`
       SELECT ROW_COUNT, BYTES
-      FROM ${database}.INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_CATALOG = '${database}'
-        AND TABLE_SCHEMA = '${schema}'
-        AND TABLE_NAME = '${table}'
+      FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_CATALOG = ${quoteStringLiteral(database)}
+        AND TABLE_SCHEMA = ${quoteStringLiteral(schema)}
+        AND TABLE_NAME = ${quoteStringLiteral(table)}
     `);
 
     const basicInfo = tableInfo.rows[0];
@@ -626,7 +631,11 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         table,
         columns,
       );
-      const statsResult = await this.adapter.query(statsQuery);
+      const columnLabels = columns.map((column) => column.name);
+      const statsResult = await this.adapter.query(statsQuery, [
+        ...columnLabels,
+        ...columnLabels,
+      ]);
 
       // Parse results - each row represents one column's statistics
       for (const row of statsResult.rows) {
@@ -669,23 +678,27 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     table: string,
     columns: Column[],
   ): string {
-    const fullyQualifiedTable = `${database}.${schema}.${table}`;
+    const fullyQualifiedTable = quoteQualifiedIdentifier(
+      [database, schema, table],
+      "snowflake",
+    );
 
     // Build raw_stats CTE with all column statistics in one scan
     const rawStatsSelects = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
+        const quotedColumn = quoteIdentifier(columnName, "snowflake");
         const isNumeric = this.isNumericType(column.dataType);
         const isDate = this.isDateType(column.dataType);
 
         let selectClause = `
-        COUNT(DISTINCT ${columnName}) AS distinct_count_${this.sanitizeColumnName(columnName)},
-        SUM(CASE WHEN ${columnName} IS NULL THEN 1 ELSE 0 END) AS null_count_${this.sanitizeColumnName(columnName)}`;
+        COUNT(DISTINCT ${quotedColumn}) AS tf_distinct_${index},
+        SUM(CASE WHEN ${quotedColumn} IS NULL THEN 1 ELSE 0 END) AS tf_null_${index}`;
 
         if (isNumeric || isDate) {
           selectClause += `,
-        MIN(${columnName}) AS min_${this.sanitizeColumnName(columnName)},
-        MAX(${columnName}) AS max_${this.sanitizeColumnName(columnName)}`;
+        MIN(${quotedColumn}) AS tf_min_${index},
+        MAX(${quotedColumn}) AS tf_max_${index}`;
         }
 
         return selectClause;
@@ -696,8 +709,10 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     const sampleValuesUnions = columns
       .map((column) => {
         const columnName = column.name;
+        const quotedColumn = quoteIdentifier(columnName, "snowflake");
+        const columnLabel = "?";
         return `
-    SELECT '${columnName}' AS column_name,
+    SELECT ${columnLabel} AS column_name,
            LISTAGG(
                CASE
                    WHEN LENGTH(sample_val) > 100
@@ -707,9 +722,9 @@ export class SnowflakeIntrospector extends BaseIntrospector {
                ','
            ) WITHIN GROUP (ORDER BY sample_val) AS sample_values
     FROM (
-        SELECT DISTINCT TO_VARCHAR(${columnName}) AS sample_val
+        SELECT DISTINCT TO_VARCHAR(${quotedColumn}) AS sample_val
         FROM sample_data
-        WHERE ${columnName} IS NOT NULL
+        WHERE ${quotedColumn} IS NOT NULL
         LIMIT 20
     )`;
       })
@@ -717,23 +732,23 @@ export class SnowflakeIntrospector extends BaseIntrospector {
 
     // Build stats CTE with UNION ALL for each column
     const statsUnions = columns
-      .map((column) => {
+      .map((column, index) => {
         const columnName = column.name;
-        const sanitizedName = this.sanitizeColumnName(columnName);
+        const columnLabel = "?";
         const isNumeric = this.isNumericType(column.dataType);
         const isDate = this.isDateType(column.dataType);
 
         let minMaxClause = "NULL AS min_value,\n        NULL AS max_value";
         if (isNumeric || isDate) {
-          minMaxClause = `TO_VARCHAR(rs.min_${sanitizedName}) AS min_value,
-        TO_VARCHAR(rs.max_${sanitizedName}) AS max_value`;
+          minMaxClause = `TO_VARCHAR(rs.tf_min_${index}) AS min_value,
+        TO_VARCHAR(rs.tf_max_${index}) AS max_value`;
         }
 
         return `
     SELECT
-        '${columnName}' AS column_name,
-        rs.distinct_count_${sanitizedName} AS distinct_count,
-        rs.null_count_${sanitizedName} AS null_count,
+        ${columnLabel} AS column_name,
+        rs.tf_distinct_${index} AS distinct_count,
+        rs.tf_null_${index} AS null_count,
         ${minMaxClause}
     FROM raw_stats rs`;
       })
@@ -765,16 +780,6 @@ SELECT
 FROM stats s
 LEFT JOIN sample_values sv ON s.column_name = sv.column_name
 ORDER BY s.column_name`;
-  }
-
-  /**
-   * Sanitize column name for use in SQL aliases (replace special characters)
-   */
-  private sanitizeColumnName(columnName: string): string {
-    return columnName
-      .replace(/[^a-zA-Z0-9_]/g, "_")
-      .replace(/^(\d)/, "_$1") // Prefix with _ if starts with number
-      .toLowerCase();
   }
 
   /**

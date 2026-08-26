@@ -12,6 +12,7 @@ import {
   type SnowflakeCredentials,
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { resolveQueryTimeout } from "../utils/query-options.js";
 import {
   type AdapterQueryResult,
   BaseAdapter,
@@ -158,6 +159,10 @@ export class SnowflakeAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(
+      timeout,
+      TIMEOUT_CONFIG.query.default,
+    );
     this.ensureConnected();
 
     if (!this.connection) {
@@ -187,9 +192,6 @@ export class SnowflakeAdapter extends BaseAdapter {
     const connection = this.connection;
 
     try {
-      // Set query timeout if specified (default: 120 seconds for Snowflake queue handling)
-      const timeoutMs = timeout || TIMEOUT_CONFIG.query.default;
-
       // Only apply limit if explicitly requested, otherwise fetch all rows
       const limit = maxRows && maxRows > 0 ? maxRows : undefined;
 
@@ -285,7 +287,7 @@ export class SnowflakeAdapter extends BaseAdapter {
       // Use the error classification system
       throw classifyError(error, {
         sql,
-        timeout: timeout || TIMEOUT_CONFIG.query.default,
+        timeout: timeoutMs,
       });
     }
   }
@@ -335,6 +337,10 @@ export class SnowflakeAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    const timeoutMs = resolveQueryTimeout(
+      timeout,
+      TIMEOUT_CONFIG.query.default,
+    );
     this.ensureConnected();
 
     if (!this.connection) {
@@ -342,7 +348,6 @@ export class SnowflakeAdapter extends BaseAdapter {
     }
 
     try {
-      const timeoutMs = timeout || TIMEOUT_CONFIG.query.default;
       let statement: SnowflakeStatement | undefined;
       const operation = new Promise<{ rowCount: number }>((resolve, reject) => {
         if (!this.connection) {
@@ -391,7 +396,7 @@ export class SnowflakeAdapter extends BaseAdapter {
     } catch (error) {
       throw classifyError(error, {
         sql,
-        timeout: timeout || TIMEOUT_CONFIG.query.default,
+        timeout: timeoutMs,
       });
     }
   }

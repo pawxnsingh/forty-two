@@ -8,6 +8,7 @@ import {
   type PostgreSQLCredentials,
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { resolveQueryTimeout } from "../utils/query-options.js";
 import {
   type AdapterQueryResult,
   BaseAdapter,
@@ -99,6 +100,7 @@ export class PostgreSQLAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.client) {
@@ -106,8 +108,6 @@ export class PostgreSQLAdapter extends BaseAdapter {
     }
 
     try {
-      // Set query timeout if specified (default: 60 seconds)
-      const timeoutMs = timeout || 60000;
       await this.client.query(`SET statement_timeout = ${timeoutMs}`);
 
       // If no maxRows specified, use regular query
@@ -261,6 +261,7 @@ export class PostgreSQLAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
     if (!this.client) {
@@ -268,8 +269,6 @@ export class PostgreSQLAdapter extends BaseAdapter {
     }
 
     try {
-      // Set query timeout if specified (default: 60 seconds)
-      const timeoutMs = timeout || 60000;
       await this.client.query(`SET statement_timeout = ${timeoutMs}`);
 
       const result = await this.client.query(sql, params);
