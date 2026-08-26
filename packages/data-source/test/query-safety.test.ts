@@ -4,7 +4,13 @@ import test from "node:test";
 import type { DatabaseAdapter } from "../src/adapters/base.js";
 import { BigQueryAdapter } from "../src/adapters/bigquery.js";
 import { convertPositionalPlaceholders } from "../src/adapters/helpers/positional-placeholders.js";
+import { MySQLAdapter } from "../src/adapters/mysql.js";
+import { PostgreSQLAdapter } from "../src/adapters/postgresql.js";
+import { RedshiftAdapter } from "../src/adapters/redshift.js";
 import { BigQueryIntrospector } from "../src/introspection/bigquery.js";
+import { MySQLIntrospector } from "../src/introspection/mysql.js";
+import { PostgreSQLIntrospector } from "../src/introspection/postgresql.js";
+import { SnowflakeIntrospector } from "../src/introspection/snowflake.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -61,6 +67,305 @@ test("validates query timeout before SQL interpolation", () => {
   for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
     assert.throws(() => resolveQueryTimeout(invalid));
   }
+});
+
+test("accepts PostgreSQL's legacy database credential alias at every boundary", async () => {
+  const credentials = {
+    type: DataSourceType.PostgreSQL,
+    host: "127.0.0.1",
+    port: 1,
+    database: "legacy_database",
+    username: "reader",
+    password: "secret",
+    ssl: false,
+    connection_timeout: 10,
+  } as const;
+
+  assert.equal(isValidCredentials(credentials), true);
+  assert.equal(toCredentials(credentials).database, "legacy_database");
+  await assert.rejects(
+    new PostgreSQLAdapter().initialize(credentials),
+    (error: unknown) => {
+      assert.match(String(error), /Failed to initialize PostgreSQL client/);
+      assert.doesNotMatch(String(error), /Invalid credentials/);
+      return true;
+    },
+  );
+});
+
+test("rejects invalid direct introspection bounds before cold or warm cache access", async () => {
+  let queryCount = 0;
+  const adapter = {
+    async query() {
+      queryCount += 1;
+      return {
+        rows: [{ name: "one" }, { name: "two" }],
+        fields: [],
+        rowCount: 2,
+      };
+    },
+  } as unknown as DatabaseAdapter;
+  const introspector = new PostgreSQLIntrospector("postgres", adapter);
+
+  for (const limit of [0, -1, 1.5, Number.NaN, 10_001]) {
+    await assert.rejects(introspector.getDatabases({ limit }), /limit/i);
+    await assert.rejects(introspector.getDatabases({ limit }), /limit/i);
+  }
+  await assert.rejects(introspector.getDatabases({ timeout: 0 }), /timeout/i);
+  assert.equal(queryCount, 0);
+});
+
+test("serializes session-level PostgreSQL and Redshift timeouts with queries", async () => {
+  for (const adapter of [new PostgreSQLAdapter(), new RedshiftAdapter()]) {
+    const calls: string[] = [];
+    const client = {
+      async query(sql: string) {
+        calls.push(sql);
+        if (sql === "SELECT 'first'") {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        return { rows: [], fields: [], rowCount: 0 };
+      },
+    };
+    Object.assign(adapter, { client, connected: true });
+
+    await Promise.all([
+      adapter.query("SELECT 'first'", undefined, undefined, 1_000),
+      adapter.query("SELECT 'second'", undefined, undefined, 2_000),
+    ]);
+
+    assert.deepEqual(calls, [
+      "SET statement_timeout = 1000",
+      "SELECT 'first'",
+      "SET statement_timeout = 2000",
+      "SELECT 'second'",
+    ]);
+  }
+});
+
+test("bounds MySQL rows by streaming the original SQL and reconnects after cancellation", async () => {
+  const boundedAdapter = new MySQLAdapter();
+  let boundedSql = "";
+  let boundedParams: unknown;
+  Object.assign(boundedAdapter, {
+    connected: true,
+    connection: {
+      query(sql: string, params: unknown) {
+        boundedSql = sql;
+        boundedParams = params;
+        const listeners = new Map<string, (...args: unknown[]) => void>();
+        return {
+          on(event: string, listener: (...args: unknown[]) => void) {
+            listeners.set(event, listener);
+            return this;
+          },
+          stream() {
+            return {
+              on(event: string, listener: (...args: unknown[]) => void) {
+                if (event === "data") {
+                  listener({ id: 1 });
+                  listener({ id: 2 });
+                  listener({ id: 3 });
+                }
+                return this;
+              },
+            };
+          },
+        };
+      },
+      destroy() {},
+    },
+  });
+
+  const bounded = await boundedAdapter.query(
+    "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.id > ?; -- note",
+    [0],
+    2,
+    1_000,
+  );
+  assert.equal(
+    boundedSql,
+    "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.id > ?; -- note",
+  );
+  assert.deepEqual(boundedParams, [0]);
+  assert.equal(bounded.rows.length, 2);
+  assert.equal(bounded.hasMoreRows, true);
+
+  const recoveryAdapter = new MySQLAdapter();
+  let destroyed = false;
+  Object.assign(recoveryAdapter, {
+    connected: true,
+    credentials: {
+      type: DataSourceType.MySQL,
+      host: "db",
+      default_database: "app",
+      username: "reader",
+      password: "secret",
+    },
+    connection: {
+      execute: (
+        _sql: string,
+        _params: unknown,
+        _callback: (...args: unknown[]) => void,
+      ) => undefined,
+      destroy: () => {
+        destroyed = true;
+      },
+    },
+  });
+  recoveryAdapter.initialize = async () => {
+    Object.assign(recoveryAdapter, {
+      connected: true,
+      connection: {
+        execute(
+          _sql: string,
+          _params: unknown,
+          callback: (...args: unknown[]) => void,
+        ) {
+          callback(null, [{ ok: 1 }], []);
+        },
+      },
+    });
+  };
+
+  await assert.rejects(
+    recoveryAdapter.query("SELECT 1", undefined, undefined, 1),
+    /timed out/i,
+  );
+  assert.equal(destroyed, true);
+  const recovered = await recoveryAdapter.query("SELECT 1");
+  assert.deepEqual(recovered.rows, [{ ok: 1 }]);
+});
+
+test("pushes discovery limits into MySQL metadata work without per-table fanout", async () => {
+  const calls: Array<{
+    sql: string;
+    maxRows: number | undefined;
+    timeout: number | undefined;
+  }> = [];
+  const adapter = {
+    async query(
+      sql: string,
+      _params: unknown,
+      maxRows: number | undefined,
+      timeout: number | undefined,
+    ) {
+      calls.push({ sql, maxRows, timeout });
+      return {
+        rows: [
+          {
+            database_name: "app",
+            name: "orders",
+            type: "BASE TABLE",
+            row_count: 7,
+            size_bytes: 42,
+          },
+        ],
+        fields: [],
+        rowCount: 1,
+      };
+    },
+  } as unknown as DatabaseAdapter;
+
+  const tables = await new MySQLIntrospector("mysql", adapter).getTables(
+    undefined,
+    undefined,
+    { limit: 2, timeout: 1_234 },
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.maxRows, 2);
+  assert.equal(calls[0]?.timeout, 1_234);
+  assert.equal(tables[0]?.rowCount, 7);
+});
+
+test("Snowflake sparse discovery scans later and inaccessible databases", async () => {
+  const calls: Array<{ sql: string; maxRows: number | undefined }> = [];
+  const adapter = {
+    async query(sql: string, _params: unknown, maxRows: number | undefined) {
+      calls.push({ sql, maxRows });
+      if (sql.includes('"DB_1".INFORMATION_SCHEMA.TABLES')) {
+        throw new Error("inaccessible database");
+      }
+      const rows = sql.includes("SHOW DATABASES")
+        ? Array.from({ length: 3 }, (_, index) => ({ name: `DB_${index}` }))
+        : sql.includes('"DB_2".INFORMATION_SCHEMA.TABLES')
+          ? Array.from({ length: 3 }, (_, index) => ({
+              TABLE_CATALOG: "DB_0",
+              TABLE_SCHEMA: "PUBLIC",
+              TABLE_NAME: `TABLE_${index}`,
+              TABLE_TYPE: "BASE TABLE",
+            }))
+          : [];
+      const limited = maxRows === undefined ? rows : rows.slice(0, maxRows);
+      return { rows: limited, fields: [], rowCount: limited.length };
+    },
+  } as unknown as DatabaseAdapter;
+
+  const tables = await new SnowflakeIntrospector(
+    "snowflake",
+    adapter,
+  ).getTables(undefined, undefined, { limit: 3, timeout: 1_234 });
+
+  assert.equal(tables.length, 3);
+  assert.equal(
+    calls.filter((call) => call.sql.includes("INFORMATION_SCHEMA.TABLES"))
+      .length,
+    3,
+  );
+  assert.ok(
+    calls.some((call) => call.sql.includes('"DB_2".INFORMATION_SCHEMA.TABLES')),
+  );
+});
+
+test("BigQuery sparse table discovery scans later datasets", async () => {
+  const queries: string[] = [];
+  const adapter = {
+    async query(sql: string) {
+      queries.push(sql);
+      let rows: Record<string, unknown>[] = [];
+      if (sql.includes("INFORMATION_SCHEMA.SCHEMATA")) {
+        rows = Array.from({ length: 3 }, (_, index) => ({
+          dataset_name: `dataset-${index}`,
+          project_name: "project-a",
+        }));
+      } else if (sql.includes("dataset-1.INFORMATION_SCHEMA.TABLES")) {
+        throw new Error("inaccessible dataset");
+      } else if (sql.includes("dataset-2.INFORMATION_SCHEMA.TABLES")) {
+        rows = [
+          {
+            project_name: "project-a",
+            dataset_name: "dataset-2",
+            table_name: "orders",
+            table_type: "BASE TABLE",
+          },
+        ];
+      } else if (sql.includes(".__TABLES__`")) {
+        rows = [{ table_id: "orders", row_count: 1, size_bytes: 10 }];
+      }
+      return { rows, fields: [], rowCount: rows.length };
+    },
+  } as unknown as DatabaseAdapter;
+  const introspector = new BigQueryIntrospector(
+    "analytics",
+    adapter,
+    "project-a",
+    "US",
+  );
+
+  const tables = await introspector.getTables(undefined, undefined, {
+    limit: 2,
+    timeout: 1_234,
+  });
+
+  assert.deepEqual(
+    tables.map((table) => table.name),
+    ["orders"],
+  );
+  assert.ok(
+    queries.some((query) =>
+      query.includes("dataset-2.INFORMATION_SCHEMA.TABLES"),
+    ),
+  );
 });
 
 test("replaces only real positional placeholders", () => {
@@ -254,7 +559,10 @@ test("BigQuery normalizes blank, multi-region, and regional locations", async ()
   await adapter.initialize({
     type: DataSourceType.BigQuery,
     project_id: "project-a",
-    service_account_key: {},
+    service_account_key: {
+      client_email: "reader@project-a.iam.gserviceaccount.com",
+      private_key: "test-private-key",
+    },
     location: "   ",
   });
   const queries: string[] = [];

@@ -65,7 +65,7 @@ export interface BigQueryCredentials {
 /**
  * PostgreSQL credentials interface
  */
-export interface PostgreSQLCredentials {
+interface PostgreSQLCredentialsBase {
   /** Data source type */
   type: DataSourceType.PostgreSQL;
 
@@ -74,12 +74,6 @@ export interface PostgreSQLCredentials {
 
   /** Database port */
   port?: number;
-
-  /** Database name */
-  default_database: string;
-
-  /** Database name */
-  database?: string;
 
   /** Username for authentication */
   username: string;
@@ -103,6 +97,13 @@ export interface PostgreSQLCredentials {
   /** Connection timeout in milliseconds */
   connection_timeout?: number;
 }
+
+/** PostgreSQL credentials with either supported database-name spelling. */
+export type PostgreSQLCredentials = PostgreSQLCredentialsBase &
+  (
+    | { default_database: string; database?: string }
+    | { default_database?: string; database: string }
+  );
 
 /**
  * MySQL credentials interface

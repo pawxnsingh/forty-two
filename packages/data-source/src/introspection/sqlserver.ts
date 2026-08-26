@@ -10,7 +10,7 @@ import type {
   TableStatistics,
   View,
 } from "../types/introspection.js";
-import { BaseIntrospector } from "./base.js";
+import { BaseIntrospector, type IntrospectionQueryOptions } from "./base.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -49,17 +49,19 @@ export class SQLServerIntrospector extends BaseIntrospector {
     return Date.now() - lastFetched.getTime() < this.CACHE_TTL;
   }
 
-  async getDatabases(): Promise<Database[]> {
+  async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.databases &&
       this.isCacheValid(this.cache.databases.lastFetched)
     ) {
-      return this.cache.databases.data;
+      return this.cache.databases.data.slice(0, options?.limit);
     }
 
     try {
-      const databasesResult = await this.adapter.query(`
+      const databasesResult = await this.adapter.query(
+        `
         SELECT name,
                database_id,
                create_date,
@@ -72,7 +74,11 @@ export class SQLServerIntrospector extends BaseIntrospector {
         FROM sys.databases
         WHERE name NOT IN ('master', 'tempdb', 'model', 'msdb')
         ORDER BY name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const databases = databasesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -88,7 +94,9 @@ export class SQLServerIntrospector extends BaseIntrospector {
         },
       }));
 
-      this.cache.databases = { data: databases, lastFetched: new Date() };
+      if (!options?.limit) {
+        this.cache.databases = { data: databases, lastFetched: new Date() };
+      }
       return databases;
     } catch (error) {
       console.warn("Failed to fetch SQL Server databases:", error);
@@ -96,13 +104,17 @@ export class SQLServerIntrospector extends BaseIntrospector {
     }
   }
 
-  async getSchemas(_database?: string): Promise<Schema[]> {
+  async getSchemas(
+    _database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.schemas &&
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
-      return this.cache.schemas.data;
+      return this.cache.schemas.data.slice(0, options?.limit);
     }
 
     try {
@@ -110,7 +122,8 @@ export class SQLServerIntrospector extends BaseIntrospector {
                              'db_securityadmin', 'db_ddladmin', 'db_backupoperator', 'db_datareader',
                              'db_datawriter', 'db_denydatareader', 'db_denydatawriter')`;
 
-      const schemasResult = await this.adapter.query(`
+      const schemasResult = await this.adapter.query(
+        `
         SELECT s.name as schema_name,
                DB_NAME() as database_name,
                p.name as owner_name,
@@ -121,7 +134,11 @@ export class SQLServerIntrospector extends BaseIntrospector {
         LEFT JOIN sys.database_principals p ON s.principal_id = p.principal_id
         ${whereClause}
         ORDER BY s.name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const schemas = schemasResult.rows.map((row) => ({
         name: this.getString(row.schema_name) || "",
@@ -134,7 +151,9 @@ export class SQLServerIntrospector extends BaseIntrospector {
         },
       }));
 
-      this.cache.schemas = { data: schemas, lastFetched: new Date() };
+      if (!options?.limit) {
+        this.cache.schemas = { data: schemas, lastFetched: new Date() };
+      }
       return schemas;
     } catch (error) {
       console.warn("Failed to fetch SQL Server schemas:", error);
@@ -142,7 +161,12 @@ export class SQLServerIntrospector extends BaseIntrospector {
     }
   }
 
-  async getTables(database?: string, schema?: string): Promise<Table[]> {
+  async getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data and no filters
     if (
       !database &&
@@ -150,7 +174,7 @@ export class SQLServerIntrospector extends BaseIntrospector {
       this.cache.tables &&
       this.isCacheValid(this.cache.tables.lastFetched)
     ) {
-      return this.cache.tables.data;
+      return this.cache.tables.data.slice(0, options?.limit);
     }
 
     // If we have cached data and filters, use cached data
@@ -167,7 +191,7 @@ export class SQLServerIntrospector extends BaseIntrospector {
         tables = tables.filter((table) => table.schema === schema);
       }
 
-      return tables;
+      return tables.slice(0, options?.limit);
     }
 
     try {
@@ -179,7 +203,8 @@ export class SQLServerIntrospector extends BaseIntrospector {
         whereClause = `WHERE s.name = ${quoteStringLiteral(schema)}`;
       }
 
-      const tablesResult = await this.adapter.query(`
+      const tablesResult = await this.adapter.query(
+        `
         SELECT DB_NAME() as database_name,
                s.name as schema_name,
                t.name as table_name,
@@ -190,7 +215,11 @@ export class SQLServerIntrospector extends BaseIntrospector {
         INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
         ${whereClause}
         ORDER BY s.name, t.name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const tables = tablesResult.rows.map((row) => ({
         name: this.getString(row.table_name) || "",
@@ -201,43 +230,50 @@ export class SQLServerIntrospector extends BaseIntrospector {
         lastModified: this.parseDate(row.modify_date) || new Date(),
       }));
 
-      // Enhance tables with basic statistics
-      const tablesWithStats = await Promise.all(
-        tables.map(async (table) => {
-          try {
-            const tableStatsResult = await this.adapter.query(
-              `
-              SELECT
-                SUM(p.rows) as row_count,
-                SUM(a.total_pages) * 8 * 1024 as size_bytes
+      let tablesWithStats = tables;
+      if (tables.length > 0) {
+        try {
+          const predicates = tables.map(
+            () => "(t.name = ? AND SCHEMA_NAME(t.schema_id) = ?)",
+          );
+          const params = tables.flatMap((table) => [table.name, table.schema]);
+          const result = await this.adapter.query(
+            `
+              SELECT t.name as table_name,
+                     SCHEMA_NAME(t.schema_id) as schema_name,
+                     SUM(p.rows) as row_count,
+                     SUM(a.total_pages) * 8 * 1024 as size_bytes
               FROM sys.tables t
               INNER JOIN sys.partitions p ON t.object_id = p.object_id
               INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
-              WHERE t.name = ?
-                AND SCHEMA_NAME(t.schema_id) = ?
-                AND p.index_id IN (0,1)
+              WHERE (${predicates.join(" OR ")}) AND p.index_id IN (0,1)
+              GROUP BY t.name, t.schema_id
             `,
-              [table.name, table.schema],
-            );
-
-            const stats = tableStatsResult.rows[0];
+            params,
+            tables.length,
+            options?.timeout,
+          );
+          const stats = new Map(
+            result.rows.map((row) => [
+              `${this.getString(row.schema_name)}.${this.getString(row.table_name)}`,
+              row,
+            ]),
+          );
+          tablesWithStats = tables.map((table) => {
+            const row = stats.get(`${table.schema}.${table.name}`);
             return {
               ...table,
-              rowCount: this.parseNumber(stats?.row_count) ?? 0,
-              sizeBytes: this.parseNumber(stats?.size_bytes) ?? 0,
+              rowCount: this.parseNumber(row?.row_count) ?? 0,
+              sizeBytes: this.parseNumber(row?.size_bytes) ?? 0,
             };
-          } catch (error) {
-            console.warn(
-              `Failed to get stats for table ${table.schema}.${table.name}:`,
-              error,
-            );
-            return table;
-          }
-        }),
-      );
+          });
+        } catch (error) {
+          console.warn("Failed to fetch SQL Server table statistics:", error);
+        }
+      }
 
       // Only cache if we fetched all tables (no filters)
-      if (!database && !schema) {
+      if (!database && !schema && !options?.limit) {
         this.cache.tables = { data: tablesWithStats, lastFetched: new Date() };
       }
 

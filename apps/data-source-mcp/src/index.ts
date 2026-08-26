@@ -1,0 +1,45 @@
+import { createServer } from "node:http";
+
+import { loadServerConfig } from "./config.js";
+import { ConnectionRegistry } from "./connection-registry.js";
+import { createHttpApp, HttpRequestLifecycle } from "./http-server.js";
+import { drainAndClose } from "./shutdown.js";
+
+const config = loadServerConfig();
+const registry = new ConnectionRegistry(config.connections);
+const lifecycle = new HttpRequestLifecycle();
+const app = createHttpApp(config, registry, lifecycle);
+const httpServer = createServer(app);
+
+httpServer.listen(config.port, config.host, () => {
+  console.log(
+    `Forty Two data-source MCP listening on http://${config.host}:${config.port}/mcp with ${config.connections.length} configured connection(s)`,
+  );
+});
+
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}; shutting down data-source MCP`);
+
+  await drainAndClose({
+    httpServer,
+    lifecycle,
+    registry,
+    timeoutMs: config.shutdownTimeoutMs,
+  });
+  console.log("Data-source MCP shutdown complete");
+}
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    void shutdown(signal).then(
+      () => process.exit(0),
+      (error) => {
+        console.error("Failed to shut down cleanly", error);
+        process.exit(1);
+      },
+    );
+  });
+}

@@ -10,7 +10,7 @@ import type {
   TableStatistics,
   View,
 } from "../types/introspection.js";
-import { BaseIntrospector } from "./base.js";
+import { BaseIntrospector, type IntrospectionQueryOptions } from "./base.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -49,17 +49,19 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     return Date.now() - lastFetched.getTime() < this.CACHE_TTL;
   }
 
-  async getDatabases(): Promise<Database[]> {
+  async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.databases &&
       this.isCacheValid(this.cache.databases.lastFetched)
     ) {
-      return this.cache.databases.data;
+      return this.cache.databases.data.slice(0, options?.limit);
     }
 
     try {
-      const databasesResult = await this.adapter.query(`
+      const databasesResult = await this.adapter.query(
+        `
         SELECT datname as name,
                pg_catalog.pg_get_userbyid(datdba) as owner,
                pg_catalog.shobj_description(oid, 'pg_database') as comment,
@@ -69,7 +71,11 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         FROM pg_catalog.pg_database
         WHERE datistemplate = false
         ORDER BY datname
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const databases = databasesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -82,7 +88,9 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         },
       }));
 
-      this.cache.databases = { data: databases, lastFetched: new Date() };
+      if (!options?.limit) {
+        this.cache.databases = { data: databases, lastFetched: new Date() };
+      }
       return databases;
     } catch (error) {
       console.warn("Failed to fetch PostgreSQL databases:", error);
@@ -90,14 +98,18 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     }
   }
 
-  async getSchemas(database?: string): Promise<Schema[]> {
+  async getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data and no filters
     if (
       !database &&
       this.cache.schemas &&
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
-      return this.cache.schemas.data;
+      return this.cache.schemas.data.slice(0, options?.limit);
     }
 
     // If we have cached data and filters, use cached data
@@ -106,9 +118,10 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
       const schemas = this.cache.schemas.data;
-      return database
+      const filtered = database
         ? schemas.filter((schema) => schema.database === database)
         : schemas;
+      return filtered.slice(0, options?.limit);
     }
 
     try {
@@ -119,14 +132,19 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         whereClause += ` AND catalog_name = ${quoteStringLiteral(database)}`;
       }
 
-      const schemasResult = await this.adapter.query(`
+      const schemasResult = await this.adapter.query(
+        `
         SELECT schema_name as name,
                catalog_name as database,
                schema_owner as owner
         FROM information_schema.schemata
         ${whereClause}
         ORDER BY schema_name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const schemas = schemasResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -135,7 +153,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
       }));
 
       // Only cache if we fetched all schemas (no database filter)
-      if (!database) {
+      if (!database && !options?.limit) {
         this.cache.schemas = { data: schemas, lastFetched: new Date() };
       }
 
@@ -146,7 +164,12 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     }
   }
 
-  async getTables(database?: string, schema?: string): Promise<Table[]> {
+  async getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data and no filters
     if (
       !database &&
@@ -154,7 +177,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
       this.cache.tables &&
       this.isCacheValid(this.cache.tables.lastFetched)
     ) {
-      return this.cache.tables.data;
+      return this.cache.tables.data.slice(0, options?.limit);
     }
 
     // If we have cached data and filters, use cached data
@@ -171,7 +194,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         tables = tables.filter((table) => table.schema === schema);
       }
 
-      return tables;
+      return tables.slice(0, options?.limit);
     }
 
     try {
@@ -186,7 +209,8 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
       }
 
-      const tablesResult = await this.adapter.query(`
+      const tablesResult = await this.adapter.query(
+        `
         SELECT t.table_catalog as database,
                t.table_schema as schema,
                t.table_name as name,
@@ -199,7 +223,11 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         ${whereClause}
         AND t.table_type != 'VIEW'
         ORDER BY schema, name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const tables = tablesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -211,7 +239,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
       }));
 
       // Only cache if we fetched all tables (no filters)
-      if (!database && !schema) {
+      if (!database && !schema && !options?.limit) {
         this.cache.tables = { data: tables, lastFetched: new Date() };
       }
 

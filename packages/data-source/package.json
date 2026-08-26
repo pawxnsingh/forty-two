@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc",
     "check-types": "tsc --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "test:mysql-integration": "bash test/mysql-integration.sh"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^8.1.1",

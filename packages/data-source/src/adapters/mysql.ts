@@ -1,4 +1,4 @@
-import mysql from "mysql2/promise";
+import mysql from "mysql2";
 import type { DataSourceIntrospector } from "../introspection/base.js";
 import { MySQLIntrospector } from "../introspection/mysql.js";
 import {
@@ -13,6 +13,7 @@ import {
   BaseAdapter,
   type FieldMetadata,
 } from "./base.js";
+import { AsyncMutex } from "./helpers/async-mutex.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { mapMySQLType } from "./type-mappings/mysql.js";
 
@@ -22,6 +23,7 @@ import { mapMySQLType } from "./type-mappings/mysql.js";
 export class MySQLAdapter extends BaseAdapter {
   private connection?: mysql.Connection | undefined;
   private introspector?: MySQLIntrospector;
+  private readonly queryMutex = new AsyncMutex();
 
   private async executeWithTimeout<T>(
     operation: Promise<T>,
@@ -30,9 +32,7 @@ export class MySQLAdapter extends BaseAdapter {
     let timer: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        this.connection?.destroy();
-        this.connection = undefined;
-        this.connected = false;
+        this.invalidateConnection();
         reject(
           new Error(
             `MySQL operation timed out after ${timeoutMs}ms; its outcome is unknown`,
@@ -84,7 +84,11 @@ export class MySQLAdapter extends BaseAdapter {
         config.charset = mysqlCredentials.charset;
       }
 
-      this.connection = await mysql.createConnection(config);
+      const connection = mysql.createConnection(config);
+      await new Promise<void>((resolve, reject) => {
+        connection.connect((error) => (error ? reject(error) : resolve()));
+      });
+      this.connection = connection;
 
       this.credentials = credentials;
       this.connected = true;
@@ -101,40 +105,45 @@ export class MySQLAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(() =>
+      this.queryExclusive(sql, params, maxRows, timeout),
+    );
+  }
+
+  private async queryExclusive(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
     const timeoutMs = resolveQueryTimeout(timeout);
-    this.ensureConnected();
+    await this.ensureUsableConnection();
 
     if (!this.connection) {
       throw new Error("MySQL connection not initialized");
     }
 
     try {
-      // For MySQL, use Promise.race() to implement timeout since mysql2
-      // doesn't support per-query timeouts on existing connections
-      // MySQL2 with promise connections doesn't support true streaming.
-      // We execute the full query and limit results in memory.
-      // This means the database still processes the full result set,
-      // but we protect the application memory by only keeping maxRows.
-      // For true streaming support, you would need to use the callback-based API.
+      if (maxRows !== undefined && maxRows > 0) {
+        return await this.executeWithTimeout(
+          this.streamBoundedQuery(sql, params, maxRows),
+          timeoutMs,
+        );
+      }
+
       const [rows, fields] = await this.executeWithTimeout(
-        this.connection.execute(sql, params),
+        this.executeQuery(sql, params),
         timeoutMs,
       );
 
       // Handle different result types
       let resultRows: Record<string, unknown>[] = [];
       let rowCount = 0;
-      let hasMoreRows = false;
+      const hasMoreRows = false;
 
       if (Array.isArray(rows)) {
         // For SELECT queries that return rows
-        if (maxRows && maxRows > 0 && rows.length > maxRows) {
-          // We have more rows than requested - limit them in memory
-          hasMoreRows = true;
-          resultRows = rows.slice(0, maxRows) as Record<string, unknown>[];
-        } else {
-          resultRows = rows as Record<string, unknown>[];
-        }
+        resultRows = rows as Record<string, unknown>[];
         rowCount = resultRows.length;
       } else if (rows && typeof rows === "object" && "affectedRows" in rows) {
         // For INSERT, UPDATE, DELETE operations
@@ -143,22 +152,7 @@ export class MySQLAdapter extends BaseAdapter {
         resultRows = [];
       }
 
-      const fieldMetadata: FieldMetadata[] = Array.isArray(fields)
-        ? fields.map((field) => ({
-            name: field.name,
-            type: mapMySQLType(`mysql_type_${field.type}`), // Map type code to normalized type
-            nullable:
-              typeof field.flags === "number" ? (field.flags & 1) === 0 : true, // NOT_NULL flag is bit 0
-            length:
-              typeof field.length === "number" && field.length > 0
-                ? field.length
-                : 0,
-            precision:
-              typeof field.decimals === "number" && field.decimals > 0
-                ? field.decimals
-                : 0,
-          }))
-        : [];
+      const fieldMetadata = this.mapFields(fields);
 
       return {
         rows: resultRows.map(normalizeRowValues),
@@ -180,7 +174,7 @@ export class MySQLAdapter extends BaseAdapter {
       }
 
       // Test connection by running a simple query
-      await this.connection.execute("SELECT 1 as test");
+      await this.executeQuery("SELECT 1 as test");
       return true;
     } catch {
       return false;
@@ -188,16 +182,9 @@ export class MySQLAdapter extends BaseAdapter {
   }
 
   async close(): Promise<void> {
-    if (this.connection) {
-      try {
-        await this.connection.end();
-      } catch (error) {
-        // Log error but don't throw - connection is being closed anyway
-        console.error("Error closing MySQL connection:", error);
-      }
-      this.connection = undefined;
-    }
-    this.connected = false;
+    await this.queryMutex.runExclusive(async () => {
+      this.invalidateConnection();
+    });
   }
 
   getDataSourceType(): string {
@@ -220,8 +207,18 @@ export class MySQLAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    return this.queryMutex.runExclusive(() =>
+      this.executeWriteExclusive(sql, params, timeout),
+    );
+  }
+
+  private async executeWriteExclusive(
+    sql: string,
+    params?: QueryParameter[],
+    timeout?: number,
+  ): Promise<{ rowCount: number }> {
     const timeoutMs = resolveQueryTimeout(timeout);
-    this.ensureConnected();
+    await this.ensureUsableConnection();
 
     if (!this.connection) {
       throw new Error("MySQL connection not initialized");
@@ -229,7 +226,7 @@ export class MySQLAdapter extends BaseAdapter {
 
     try {
       const [result] = await this.executeWithTimeout(
-        this.connection.execute(sql, params),
+        this.executeQuery(sql, params),
         timeoutMs,
       );
 
@@ -249,5 +246,113 @@ export class MySQLAdapter extends BaseAdapter {
         `MySQL write operation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
     }
+  }
+
+  private async ensureUsableConnection(): Promise<void> {
+    if (this.connected && this.connection) return;
+    if (!this.credentials) {
+      throw new Error(
+        "MySQL adapter is not connected. Call initialize() first.",
+      );
+    }
+    await this.initialize(this.credentials);
+  }
+
+  private executeQuery(
+    sql: string,
+    params?: QueryParameter[],
+  ): Promise<[mysql.QueryResult, mysql.FieldPacket[]]> {
+    const connection = this.connection;
+    if (!connection)
+      return Promise.reject(new Error("MySQL connection not initialized"));
+
+    return new Promise((resolve, reject) => {
+      connection.execute(sql, params ?? [], (error, result, fields) => {
+        if (error) reject(error);
+        else resolve([result, fields]);
+      });
+    });
+  }
+
+  private streamBoundedQuery(
+    sql: string,
+    params: QueryParameter[] | undefined,
+    maxRows: number,
+  ): Promise<AdapterQueryResult> {
+    const connection = this.connection;
+    if (!connection)
+      return Promise.reject(new Error("MySQL connection not initialized"));
+
+    return new Promise((resolve, reject) => {
+      const rows: Record<string, unknown>[] = [];
+      let fields: mysql.FieldPacket[] = [];
+      let settled = false;
+      const finish = (result: AdapterQueryResult): void => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+
+      const query = connection.query(sql, params ?? []);
+      query.on("fields", (receivedFields: unknown) => {
+        if (Array.isArray(receivedFields)) {
+          fields = receivedFields as mysql.FieldPacket[];
+        }
+      });
+      const stream = query.stream({ highWaterMark: 1 });
+      stream.on("data", (row: Record<string, unknown>) => {
+        if (settled) return;
+        if (rows.length < maxRows) {
+          rows.push(normalizeRowValues(row));
+          return;
+        }
+
+        settled = true;
+        this.invalidateConnection();
+        resolve({
+          rows,
+          rowCount: rows.length,
+          fields: this.mapFields(fields),
+          hasMoreRows: true,
+        });
+      });
+      stream.on("end", () =>
+        finish({
+          rows,
+          rowCount: rows.length,
+          fields: this.mapFields(fields),
+          hasMoreRows: false,
+        }),
+      );
+      stream.on("error", fail);
+      query.on("error", fail);
+    });
+  }
+
+  private mapFields(fields: readonly mysql.FieldPacket[]): FieldMetadata[] {
+    return fields.map((field) => ({
+      name: field.name,
+      type: mapMySQLType(`mysql_type_${field.type}`),
+      nullable:
+        typeof field.flags === "number" ? (field.flags & 1) === 0 : true,
+      length:
+        typeof field.length === "number" && field.length > 0 ? field.length : 0,
+      precision:
+        typeof field.decimals === "number" && field.decimals > 0
+          ? field.decimals
+          : 0,
+    }));
+  }
+
+  private invalidateConnection(): void {
+    const connection = this.connection;
+    this.connection = undefined;
+    this.connected = false;
+    connection?.destroy();
   }
 }

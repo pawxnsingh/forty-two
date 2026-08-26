@@ -1,119 +1,165 @@
 import { type Credentials, DataSourceType } from "../types/credentials.js";
 import { isValidBigQueryLocation } from "./bigquery-location.js";
 
-/**
- * Type guard to validate if an unknown object is valid Credentials
- * This provides runtime type safety when converting from Record<string, unknown>
- * to the Credentials union type
- */
 export function isValidCredentials(obj: unknown): obj is Credentials {
-  if (!obj || typeof obj !== "object") {
-    return false;
-  }
+  if (!isRecord(obj) || typeof obj.type !== "string") return false;
 
-  const record = obj as Record<string, unknown>;
-
-  // Check if type field exists and is valid
-  if (!record.type || typeof record.type !== "string") {
-    return false;
-  }
-
-  // Validate based on the type
-  switch (record.type) {
+  switch (obj.type) {
     case DataSourceType.Snowflake:
-      return validateSnowflakeCredentials(record);
+      return validateSnowflakeCredentials(obj);
     case DataSourceType.BigQuery:
-      return validateBigQueryCredentials(record);
+      return validateBigQueryCredentials(obj);
     case DataSourceType.PostgreSQL:
-      return validatePostgreSQLCredentials(record);
+      return validatePostgreSQLCredentials(obj);
     case DataSourceType.MySQL:
-      return validateMySQLCredentials(record);
+      return validateMySQLCredentials(obj);
     case DataSourceType.SQLServer:
-      return validateSQLServerCredentials(record);
+      return validateSQLServerCredentials(obj);
     case DataSourceType.Redshift:
-      return validateRedshiftCredentials(record);
+      return validateRedshiftCredentials(obj);
     default:
       return false;
   }
 }
 
 function validateSnowflakeCredentials(obj: Record<string, unknown>): boolean {
-  return !!(
-    obj.account_id &&
-    typeof obj.account_id === "string" &&
-    obj.warehouse_id &&
-    typeof obj.warehouse_id === "string" &&
-    obj.username &&
-    typeof obj.username === "string" &&
-    obj.password &&
-    typeof obj.password === "string" &&
-    obj.default_database &&
-    typeof obj.default_database === "string"
+  return (
+    hasRequiredStrings(obj, [
+      "account_id",
+      "warehouse_id",
+      "username",
+      "password",
+      "default_database",
+    ]) && hasOptionalStrings(obj, ["role", "default_schema", "custom_host"])
   );
 }
 
 function validateBigQueryCredentials(obj: Record<string, unknown>): boolean {
-  return !!(
-    obj.project_id &&
-    typeof obj.project_id === "string" &&
-    (obj.service_account_key || obj.key_file_path) &&
+  const hasKeyFile = isNonEmptyString(obj.key_file_path);
+  const hasServiceAccount = isValidServiceAccount(obj.service_account_key);
+  return (
+    isNonEmptyString(obj.project_id) &&
+    (hasKeyFile || hasServiceAccount) &&
+    (obj.key_file_path === undefined || hasKeyFile) &&
+    (obj.service_account_key === undefined || hasServiceAccount) &&
     isValidBigQueryLocation(obj.location)
   );
 }
 
 function validatePostgreSQLCredentials(obj: Record<string, unknown>): boolean {
-  return !!(
-    obj.host &&
-    typeof obj.host === "string" &&
-    obj.default_database &&
-    typeof obj.default_database === "string" &&
-    obj.username &&
-    typeof obj.username === "string" &&
-    obj.password &&
-    typeof obj.password === "string" &&
-    isValidPort(obj.port)
+  return (
+    hasRequiredStrings(obj, ["host", "username", "password"]) &&
+    isValidPort(obj.port) &&
+    (isNonEmptyString(obj.default_database) ||
+      isNonEmptyString(obj.database)) &&
+    hasOptionalStrings(obj, ["default_database", "database", "schema"]) &&
+    isValidSsl(obj.ssl) &&
+    isValidTimeout(obj.connection_timeout)
   );
 }
 
 function validateMySQLCredentials(obj: Record<string, unknown>): boolean {
-  return !!(
-    obj.host &&
-    typeof obj.host === "string" &&
-    obj.default_database &&
-    typeof obj.default_database === "string" &&
-    obj.username &&
-    typeof obj.username === "string" &&
-    obj.password &&
-    typeof obj.password === "string" &&
-    isValidPort(obj.port)
+  return (
+    validateUserPasswordCredentials(obj, "host") &&
+    hasOptionalStrings(obj, ["charset"]) &&
+    isValidSsl(obj.ssl) &&
+    isValidTimeout(obj.connection_timeout)
   );
 }
 
 function validateSQLServerCredentials(obj: Record<string, unknown>): boolean {
-  return !!(
-    obj.server &&
-    typeof obj.server === "string" &&
-    obj.default_database &&
-    typeof obj.default_database === "string" &&
-    obj.username &&
-    typeof obj.username === "string" &&
-    obj.password &&
-    typeof obj.password === "string" &&
-    isValidPort(obj.port)
+  return (
+    validateUserPasswordCredentials(obj, "server") &&
+    hasOptionalStrings(obj, ["domain", "instance"]) &&
+    isOptionalBoolean(obj.encrypt) &&
+    isOptionalBoolean(obj.trust_server_certificate) &&
+    isValidTimeout(obj.connection_timeout) &&
+    isValidTimeout(obj.request_timeout)
   );
 }
 
 function validateRedshiftCredentials(obj: Record<string, unknown>): boolean {
-  return !!(
-    obj.host &&
-    typeof obj.host === "string" &&
-    obj.default_database &&
-    typeof obj.default_database === "string" &&
-    obj.username &&
-    typeof obj.username === "string" &&
-    obj.password &&
-    typeof obj.password === "string" &&
-    isValidPort(obj.port)
+  return (
+    validateUserPasswordCredentials(obj, "host") &&
+    hasOptionalStrings(obj, ["default_schema", "cluster_identifier"]) &&
+    isOptionalBoolean(obj.ssl) &&
+    isValidTimeout(obj.connection_timeout)
+  );
+}
+
+function validateUserPasswordCredentials(
+  obj: Record<string, unknown>,
+  hostField: "host" | "server",
+): boolean {
+  return (
+    hasRequiredStrings(obj, [
+      hostField,
+      "default_database",
+      "username",
+      "password",
+    ]) && isValidPort(obj.port)
+  );
+}
+
+function isValidServiceAccount(value: unknown): boolean {
+  if (isRecord(value)) return isServiceAccountRecord(value);
+  if (!isNonEmptyString(value)) return false;
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) && isServiceAccountRecord(parsed);
+  } catch {
+    return true;
+  }
+}
+
+function isServiceAccountRecord(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.client_email) && isNonEmptyString(value.private_key)
+  );
+}
+
+function isValidSsl(value: unknown): boolean {
+  if (value === undefined || typeof value === "boolean") return true;
+  if (!isRecord(value)) return false;
+  return (
+    isOptionalBoolean(value.rejectUnauthorized) &&
+    hasOptionalStrings(value, ["ca", "cert", "key"])
+  );
+}
+
+function hasRequiredStrings(
+  obj: Record<string, unknown>,
+  fields: readonly string[],
+): boolean {
+  return fields.every((field) => isNonEmptyString(obj[field]));
+}
+
+function hasOptionalStrings(
+  obj: Record<string, unknown>,
+  fields: readonly string[],
+): boolean {
+  return fields.every(
+    (field) => obj[field] === undefined || isNonEmptyString(obj[field]),
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isValidTimeout(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "number" &&
+      Number.isFinite(value) &&
+      Number.isInteger(value) &&
+      value > 0 &&
+      value <= 600_000)
   );
 }
 
@@ -127,50 +173,32 @@ function isValidPort(port: unknown): boolean {
   );
 }
 
-/**
- * Safely converts a Record<string, unknown> to Credentials with validation
- * Throws a descriptive error if validation fails
- */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function toCredentials(obj: unknown): Credentials {
-  if (isValidCredentials(obj)) {
-    return obj;
-  }
+  if (isValidCredentials(obj)) return obj;
 
-  const record =
-    obj && typeof obj === "object" ? (obj as Record<string, unknown>) : {};
-
-  // Provide helpful error message about what's missing
+  const record = isRecord(obj) ? obj : {};
   const type = record.type as string | undefined;
-  if (!type) {
-    throw new Error('Credentials missing required "type" field');
-  }
+  if (!type) throw new Error('Credentials missing required "type" field');
 
-  // Type-specific error messages
   switch (type) {
     case DataSourceType.Snowflake:
-      throw new Error(
-        "Invalid Snowflake credentials: missing required fields (account_id, warehouse_id, username, password, default_database)",
-      );
+      throw new Error("Invalid Snowflake credentials");
     case DataSourceType.BigQuery:
       throw new Error(
-        "Invalid BigQuery credentials: missing required fields (project_id and either service_account_key or key_file_path)",
+        "Invalid BigQuery credentials: project_id and a valid service account key or key file are required",
       );
     case DataSourceType.PostgreSQL:
-      throw new Error(
-        "Invalid PostgreSQL credentials: missing required fields (host, default_database, username, password)",
-      );
+      throw new Error("Invalid PostgreSQL credentials");
     case DataSourceType.MySQL:
-      throw new Error(
-        "Invalid MySQL credentials: missing required fields (host, default_database, username, password)",
-      );
+      throw new Error("Invalid MySQL credentials");
     case DataSourceType.SQLServer:
-      throw new Error(
-        "Invalid SQL Server credentials: missing required fields (server, default_database, username, password)",
-      );
+      throw new Error("Invalid SQL Server credentials");
     case DataSourceType.Redshift:
-      throw new Error(
-        "Invalid Redshift credentials: missing required fields (host, default_database, username, password)",
-      );
+      throw new Error("Invalid Redshift credentials");
     default:
       throw new Error(`Unsupported data source type: ${type}`);
   }

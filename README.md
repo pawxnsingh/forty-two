@@ -5,8 +5,9 @@ This Turborepo starter is maintained by the Turborepo core team.
 ## Local Docker stack
 
 The root Compose project runs the Next.js application, hosted-mode TrueForge,
-Postgres, and Redis. Next.js and TrueForge share the `forty_two` Postgres
-database. TrueForge is built from the pinned `vendor/trueforge` submodule.
+the Forty Two datasource MCP, Postgres, and Redis. Next.js and TrueForge share
+the `forty_two` Postgres database. TrueForge is built from the pinned
+`vendor/trueforge` submodule.
 
 Initialize the submodule after cloning:
 
@@ -14,11 +15,10 @@ Initialize the submodule after cloning:
 git submodule update --init --recursive
 ```
 
-Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD` to a long, unique
-URL-safe local-development password before starting the complete stack. For
-example, `openssl rand -hex 32` produces a value that can also be embedded in
-the web application's `DATABASE_URL`. Compose fails fast when this value is
-missing.
+Copy `.env.example` to `.env`, then set `POSTGRES_PASSWORD` and
+`MCP_AUTH_TOKEN` to separate long, unique values. `openssl rand -hex 32`
+produces URL-safe local-development secrets. Compose fails fast when either
+value is missing.
 
 ```sh
 cp .env.example .env
@@ -34,6 +34,8 @@ docker compose up --build
 - TrueForge UI and API: http://localhost:8790
 - TrueForge health: http://localhost:8790/healthz
 - TrueForge API documentation: http://localhost:8790/api/v1/docs
+- Datasource MCP: http://localhost:8791/mcp
+- Datasource MCP health: http://localhost:8791/healthz
 - Postgres: `localhost:5432`, database `forty_two`
 
 Stop the stack without deleting persisted data:
