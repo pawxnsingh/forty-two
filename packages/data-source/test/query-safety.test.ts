@@ -14,6 +14,7 @@ import { DataSourceType } from "../src/types/credentials.js";
 import { normalizeBigQueryLocation } from "../src/utils/bigquery-location.js";
 import { resolveQueryTimeout } from "../src/utils/query-options.js";
 import { checkQueryIsReadOnly } from "../src/utils/sql-validation.js";
+import { isValidCredentials } from "../src/utils/validate-credentials.js";
 
 test("rejects SELECT INTO and locking reads", () => {
   for (const sql of [
@@ -217,10 +218,30 @@ test("BigQuery normalizes blank, multi-region, and regional locations", async ()
     ["us", "US"],
     ["EU", "EU"],
     ["US-CENTRAL1", "us-central1"],
+    ["AWS-US-EAST-1", "aws-us-east-1"],
+    ["azure-eastus2", "azure-eastus2"],
   ] as const) {
     assert.equal(normalizeBigQueryLocation(location), expected);
   }
-  assert.throws(() => normalizeBigQueryLocation("us central1"));
+  for (const invalid of [
+    "us central1",
+    "region-us",
+    "us--central1",
+    "us-",
+    "moon",
+    42,
+  ]) {
+    assert.throws(() => normalizeBigQueryLocation(invalid));
+    assert.equal(
+      isValidCredentials({
+        type: DataSourceType.BigQuery,
+        project_id: "project-a",
+        service_account_key: {},
+        location: invalid,
+      }),
+      false,
+    );
+  }
 
   const adapter = new BigQueryAdapter();
   await adapter.initialize({
