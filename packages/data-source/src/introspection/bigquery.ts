@@ -65,14 +65,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
     }
 
     const databases: Database[] = [
-      {
-        name: this.defaultProject,
-        created: new Date(),
-        metadata: {
-          project_name: this.defaultProject,
-          location: this.location,
-        },
-      },
+      this.createProjectDatabase(this.defaultProject),
     ];
     this.cache.databases = { data: databases, lastFetched: new Date() };
     return databases;
@@ -570,6 +563,17 @@ ORDER BY s.column_name`;
     );
   }
 
+  private createProjectDatabase(project: string): Database {
+    return {
+      name: project,
+      created: new Date(),
+      metadata: {
+        project_name: project,
+        location: this.location,
+      },
+    };
+  }
+
   /**
    * Map BigQuery table types to our standard types
    */
@@ -644,94 +648,53 @@ ORDER BY s.column_name`;
       );
     }
 
-    // Step 1: Fetch all databases (populates database cache)
-    const allDatabases = await this.getDatabases();
-
-    // Filter databases if specified
+    // BigQuery cannot enumerate every project visible to a service account. An
+    // explicit database filter therefore defines the projects to inspect;
+    // otherwise introspection remains scoped to the configured default project.
     const databases = options?.databases
-      ? allDatabases.filter(
-          (db) => options.databases?.includes(db.name) ?? false,
+      ? Array.from(new Set(options.databases), (project) =>
+          this.createProjectDatabase(project),
         )
-      : allDatabases;
+      : await this.getDatabases();
 
-    // Step 2: Fetch all schemas (benefits from database cache, populates schema cache)
-    const allSchemas = await this.getSchemas(); // No filter - gets all schemas and caches them
-
-    // Filter schemas if specified
-    let schemas = allSchemas;
-    if (options?.databases) {
-      // If databases are filtered, only include schemas from those databases
-      schemas = schemas.filter((schema) =>
-        databases.some((db) => db.name === schema.database),
-      );
-    }
+    const schemaGroups = await Promise.all(
+      databases.map((database) => this.getSchemas(database.name)),
+    );
+    let schemas = schemaGroups.flat();
     if (options?.schemas) {
-      // If specific schemas are requested, filter to those
       schemas = schemas.filter(
         (schema) => options.schemas?.includes(schema.name) ?? false,
       );
     }
 
-    // Step 3: Fetch all tables (benefits from database cache, populates table cache)
-    const allTables = await this.getTables(); // No filter - gets all tables and caches them
-
-    // Filter tables if specified
-    let tables = allTables;
-    if (options?.databases) {
-      // If databases are filtered, only include tables from those databases
-      tables = tables.filter((table) =>
-        databases.some((db) => db.name === table.database),
-      );
-    }
-    if (options?.schemas) {
-      // If schemas are filtered, only include tables from those schemas
-      tables = tables.filter((table) =>
-        schemas.some(
-          (schema) =>
-            schema.name === table.schema && schema.database === table.database,
-        ),
-      );
-    }
+    const tableGroups = await Promise.all(
+      schemas.map((schema) => this.getTables(schema.database, schema.name)),
+    );
+    let tables = tableGroups.flat();
     if (options?.tables) {
-      // If specific tables are requested, filter to those
       tables = tables.filter(
         (table) => options.tables?.includes(table.name) ?? false,
       );
     }
 
-    // Step 4: Fetch all columns (benefits from database cache, populates column cache)
-    const allColumns = await this.getColumns(); // No filter - gets all columns and caches them
-
-    // Filter columns based on filtered tables
-    const columns = allColumns.filter((column) =>
-      tables.some(
-        (table) =>
-          table.name === column.table &&
-          table.schema === column.schema &&
-          table.database === column.database,
-      ),
+    const columnGroups = await Promise.all(
+      schemas.map((schema) => this.getColumns(schema.database, schema.name)),
     );
-
-    // Step 5: Fetch all views (benefits from database cache, populates view cache)
-    const allViews = await this.getViews(); // No filter - gets all views and caches them
-
-    // Filter views if specified
-    let views = allViews;
-    if (options?.databases) {
-      // If databases are filtered, only include views from those databases
-      views = views.filter((view) =>
-        databases.some((db) => db.name === view.database),
-      );
-    }
-    if (options?.schemas) {
-      // If schemas are filtered, only include views from those schemas
-      views = views.filter((view) =>
-        schemas.some(
-          (schema) =>
-            schema.name === view.schema && schema.database === view.database,
+    const columns = columnGroups
+      .flat()
+      .filter((column) =>
+        tables.some(
+          (table) =>
+            table.name === column.table &&
+            table.schema === column.schema &&
+            table.database === column.database,
         ),
       );
-    }
+
+    const viewGroups = await Promise.all(
+      schemas.map((schema) => this.getViews(schema.database, schema.name)),
+    );
+    const views = viewGroups.flat();
 
     // Get column statistics in batches of 20 tables
     const columnsWithStats = await this.attachColumnStatisticsBigQuery(

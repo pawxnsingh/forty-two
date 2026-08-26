@@ -205,3 +205,122 @@ test("BigQuery models projects as databases and datasets as schemas", async () =
     /`project-a\.region-us\.INFORMATION_SCHEMA\.SCHEMATA`/,
   );
 });
+
+test("BigQuery full introspection honors a non-default project", async () => {
+  const { adapter, queries } = createFullIntrospectionBigQueryAdapter();
+  const introspector = new BigQueryIntrospector(
+    "analytics",
+    adapter,
+    "project-a",
+    "US",
+  );
+
+  const result = await introspector.getFullIntrospection({
+    databases: ["project-b"],
+  });
+
+  assert.deepEqual(
+    result.databases.map((database) => database.name),
+    ["project-b"],
+  );
+  assert.deepEqual(
+    result.schemas.map((schema) => `${schema.database}.${schema.name}`),
+    ["project-b.shared"],
+  );
+  assert.deepEqual(
+    result.tables.map(
+      (table) => `${table.database}.${table.schema}.${table.name}`,
+    ),
+    ["project-b.shared.orders_b"],
+  );
+  assert.ok(queries.some((query) => query.includes("`project-b.region-us")));
+  assert.ok(queries.every((query) => !query.includes("`project-a.")));
+});
+
+test("BigQuery full introspection preserves same-named datasets across projects", async () => {
+  const { adapter, queries } = createFullIntrospectionBigQueryAdapter();
+  const introspector = new BigQueryIntrospector(
+    "analytics",
+    adapter,
+    "project-a",
+    "US",
+  );
+
+  const result = await introspector.getFullIntrospection({
+    databases: ["project-a", "project-b"],
+    schemas: ["shared"],
+  });
+
+  assert.deepEqual(
+    result.schemas.map((schema) => `${schema.database}.${schema.name}`).sort(),
+    ["project-a.shared", "project-b.shared"],
+  );
+  assert.deepEqual(
+    result.tables
+      .map((table) => `${table.database}.${table.schema}.${table.name}`)
+      .sort(),
+    ["project-a.shared.orders_a", "project-b.shared.orders_b"],
+  );
+  for (const project of ["project-a", "project-b"]) {
+    assert.ok(
+      queries.some((query) =>
+        query.includes(`\`${project}.shared.INFORMATION_SCHEMA.TABLES\``),
+      ),
+    );
+  }
+});
+
+function createFullIntrospectionBigQueryAdapter(): {
+  adapter: DatabaseAdapter;
+  queries: string[];
+} {
+  const queries: string[] = [];
+  const adapter = {
+    query: async (sql: string) => {
+      queries.push(sql);
+      const project = /`(project-[ab])\./.exec(sql)?.[1] ?? "project-a";
+      const suffix = project.endsWith("a") ? "a" : "b";
+      let rows: Record<string, unknown>[] = [];
+
+      if (sql.includes("INFORMATION_SCHEMA.SCHEMATA")) {
+        rows = [
+          {
+            dataset_name: "shared",
+            project_name: project,
+            location: "US",
+            creation_time: "2026-01-01T00:00:00.000Z",
+          },
+        ];
+      } else if (sql.includes("INFORMATION_SCHEMA.TABLES")) {
+        rows = [
+          {
+            project_name: project,
+            dataset_name: "shared",
+            table_name: `orders_${suffix}`,
+            table_type: "BASE TABLE",
+            creation_time: "2026-01-01T00:00:00.000Z",
+            ddl: null,
+          },
+        ];
+      } else if (sql.includes("INFORMATION_SCHEMA.COLUMNS")) {
+        rows = [
+          {
+            project_name: project,
+            dataset_name: "shared",
+            table_name: `orders_${suffix}`,
+            column_name: "id",
+            ordinal_position: 1,
+            data_type: "STRING",
+            is_nullable: "NO",
+          },
+        ];
+      } else if (sql.includes(".__TABLES__`")) {
+        rows = [{ row_count: 1, size_bytes: 10 }];
+      }
+
+      return { rows, fields: [], rowCount: rows.length };
+    },
+  } as unknown as DatabaseAdapter;
+
+  return { adapter, queries };
+}
