@@ -11,6 +11,24 @@ test("requires a service authentication token", () => {
   assert.throws(() => loadServerConfig({}), /MCP_AUTH_TOKEN is required/);
 });
 
+test("keeps the maximum drain deadline below the Compose grace period", () => {
+  assert.equal(
+    loadServerConfig({
+      MCP_AUTH_TOKEN: "test-token",
+      SHUTDOWN_TIMEOUT_MS: "20000",
+    }).shutdownTimeoutMs,
+    20_000,
+  );
+  assert.throws(
+    () =>
+      loadServerConfig({
+        MCP_AUTH_TOKEN: "test-token",
+        SHUTDOWN_TIMEOUT_MS: "20001",
+      }),
+    /SHUTDOWN_TIMEOUT_MS/,
+  );
+});
+
 test("loads server-side connection configuration without exposing defaults", () => {
   const config = loadServerConfig({
     MCP_AUTH_TOKEN: "test-token",

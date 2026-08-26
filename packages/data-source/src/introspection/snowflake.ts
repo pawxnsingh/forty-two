@@ -22,6 +22,7 @@ import {
  * Optimized to batch metadata queries and eliminate N+1 patterns
  */
 export class SnowflakeIntrospector extends BaseIntrospector {
+  private static readonly PARENT_PAGE_SIZE = 50;
   private adapter: DatabaseAdapter;
   private cache: {
     databases?: { data: Database[]; lastFetched: Date };
@@ -131,40 +132,51 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         }));
       } else {
         // Fetch schemas for all accessible databases
-        const databases = await this.getDatabases(options);
-        for (const db of databases) {
-          if (options?.limit !== undefined && schemas.length >= options.limit)
-            break;
-          try {
-            const result = await this.adapter.query(
-              `
+        let after: string | undefined;
+        let exhausted = false;
+        while (!exhausted) {
+          const databases = options?.limit
+            ? await this.getDatabasePage(after, options.timeout)
+            : await this.getDatabases();
+          for (const db of databases) {
+            if (options?.limit !== undefined && schemas.length >= options.limit)
+              break;
+            try {
+              const result = await this.adapter.query(
+                `
               SELECT SCHEMA_NAME, CATALOG_NAME, SCHEMA_OWNER, COMMENT, CREATED, LAST_ALTERED
               FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.SCHEMATA
               WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
             `,
-              undefined,
-              options?.limit === undefined
-                ? undefined
-                : options.limit - schemas.length,
-              options?.timeout,
-            );
+                undefined,
+                options?.limit === undefined
+                  ? undefined
+                  : options.limit - schemas.length,
+                options?.timeout,
+              );
 
-            schemas.push(
-              ...result.rows.map((row) => ({
-                name: this.getString(row.SCHEMA_NAME) || "",
-                database: this.getString(row.CATALOG_NAME) || db.name,
-                owner: this.getString(row.SCHEMA_OWNER) || "",
-                comment: this.getString(row.COMMENT) || "",
-                created: this.parseDate(row.CREATED) || new Date(),
-                lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
-              })),
-            );
-          } catch (error) {
-            console.warn(
-              `Could not access schemas in database ${db.name}:`,
-              error,
-            );
+              schemas.push(
+                ...result.rows.map((row) => ({
+                  name: this.getString(row.SCHEMA_NAME) || "",
+                  database: this.getString(row.CATALOG_NAME) || db.name,
+                  owner: this.getString(row.SCHEMA_OWNER) || "",
+                  comment: this.getString(row.COMMENT) || "",
+                  created: this.parseDate(row.CREATED) || new Date(),
+                  lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
+                })),
+              );
+            } catch (error) {
+              console.warn(
+                `Could not access schemas in database ${db.name}:`,
+                error,
+              );
+            }
           }
+          if (!options?.limit || schemas.length >= options.limit) break;
+          exhausted = databases.length < SnowflakeIntrospector.PARENT_PAGE_SIZE;
+          const nextAfter = databases.at(-1)?.name;
+          if (!nextAfter || nextAfter === after) break;
+          after = nextAfter;
         }
       }
 
@@ -266,43 +278,54 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         }));
       } else {
         // Fetch tables for all accessible databases
-        const databases = await this.getDatabases(options);
-        for (const db of databases) {
-          if (options?.limit !== undefined && tables.length >= options.limit)
-            break;
-          try {
-            const result = await this.adapter.query(
-              `
+        let after: string | undefined;
+        let exhausted = false;
+        while (!exhausted) {
+          const databases = options?.limit
+            ? await this.getDatabasePage(after, options.timeout)
+            : await this.getDatabases();
+          for (const db of databases) {
+            if (options?.limit !== undefined && tables.length >= options.limit)
+              break;
+            try {
+              const result = await this.adapter.query(
+                `
               SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                      ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
               FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.TABLES
             `,
-              undefined,
-              options?.limit === undefined
-                ? undefined
-                : options.limit - tables.length,
-              options?.timeout,
-            );
+                undefined,
+                options?.limit === undefined
+                  ? undefined
+                  : options.limit - tables.length,
+                options?.timeout,
+              );
 
-            tables.push(
-              ...result.rows.map((row) => ({
-                name: this.getString(row.TABLE_NAME) || "",
-                schema: this.getString(row.TABLE_SCHEMA) || "",
-                database: this.getString(row.TABLE_CATALOG) || db.name,
-                type: this.mapTableType(this.getString(row.TABLE_TYPE)),
-                rowCount: this.parseNumber(row.ROW_COUNT) ?? 0,
-                sizeBytes: this.parseNumber(row.BYTES) ?? 0,
-                comment: this.getString(row.COMMENT) || "",
-                created: this.parseDate(row.CREATED) || new Date(),
-                lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
-              })),
-            );
-          } catch (error) {
-            console.warn(
-              `Could not access tables in database ${db.name}:`,
-              error,
-            );
+              tables.push(
+                ...result.rows.map((row) => ({
+                  name: this.getString(row.TABLE_NAME) || "",
+                  schema: this.getString(row.TABLE_SCHEMA) || "",
+                  database: this.getString(row.TABLE_CATALOG) || db.name,
+                  type: this.mapTableType(this.getString(row.TABLE_TYPE)),
+                  rowCount: this.parseNumber(row.ROW_COUNT) ?? 0,
+                  sizeBytes: this.parseNumber(row.BYTES) ?? 0,
+                  comment: this.getString(row.COMMENT) || "",
+                  created: this.parseDate(row.CREATED) || new Date(),
+                  lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
+                })),
+              );
+            } catch (error) {
+              console.warn(
+                `Could not access tables in database ${db.name}:`,
+                error,
+              );
+            }
           }
+          if (!options?.limit || tables.length >= options.limit) break;
+          exhausted = databases.length < SnowflakeIntrospector.PARENT_PAGE_SIZE;
+          const nextAfter = databases.at(-1)?.name;
+          if (!nextAfter || nextAfter === after) break;
+          after = nextAfter;
         }
       }
 
@@ -632,6 +655,25 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     // Get columns for this table
     const columns = await this.getColumns(database, schema, table);
     return this.getColumnStatisticsForColumns(database, schema, table, columns);
+  }
+
+  private async getDatabasePage(
+    after: string | undefined,
+    timeout: number | undefined,
+  ): Promise<Database[]> {
+    const result = await this.adapter.query(
+      `SHOW DATABASES LIMIT ${SnowflakeIntrospector.PARENT_PAGE_SIZE}${after ? ` FROM ${quoteStringLiteral(after)}` : ""}`,
+      undefined,
+      SnowflakeIntrospector.PARENT_PAGE_SIZE,
+      timeout,
+    );
+    return result.rows.map((row) => ({
+      name: this.getString(row.name) || "",
+      owner: this.getString(row.owner) || "",
+      comment: this.getString(row.comment) || "",
+      created: this.parseDate(row.created_on) || new Date(),
+      lastModified: this.parseDate(row.last_altered) || new Date(),
+    }));
   }
 
   /**

@@ -26,6 +26,7 @@ import {
  */
 export class BigQueryIntrospector extends BaseIntrospector {
   private static readonly MAX_CONCURRENT_QUERIES = 8;
+  private static readonly PARENT_PAGE_SIZE = 50;
   private adapter: DatabaseAdapter;
   private readonly queryLimiter = new ConcurrencyLimiter(
     BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
@@ -135,21 +136,31 @@ export class BigQueryIntrospector extends BaseIntrospector {
     options?: IntrospectionQueryOptions,
   ): Promise<Table[]> {
     if (!schema) {
-      const schemas = await this.getSchemas(database, options);
       const tables: Table[] = [];
-      for (const item of schemas) {
-        if (options?.limit !== undefined && tables.length >= options.limit)
-          break;
-        const remaining =
-          options?.limit === undefined
-            ? undefined
-            : options.limit - tables.length;
-        tables.push(
-          ...(await this.getTables(item.database, item.name, {
-            ...options,
-            limit: remaining,
-          })),
-        );
+      let offset = 0;
+      let exhausted = false;
+      while (!exhausted) {
+        const schemas = options?.limit
+          ? await this.getSchemaPage(database, offset, options.timeout)
+          : await this.getSchemas(database);
+        for (const item of schemas) {
+          if (options?.limit !== undefined && tables.length >= options.limit)
+            break;
+          const remaining =
+            options?.limit === undefined
+              ? undefined
+              : options.limit - tables.length;
+          tables.push(
+            ...(await this.getTables(item.database, item.name, {
+              ...options,
+              limit: remaining,
+            })),
+          );
+        }
+        if (!options?.limit || tables.length >= options.limit) break;
+        exhausted = schemas.length < BigQueryIntrospector.PARENT_PAGE_SIZE;
+        offset += schemas.length;
+        if (schemas.length === 0) break;
       }
       return tables;
     }
@@ -615,6 +626,38 @@ ORDER BY s.column_name`;
     return this.queryLimiter.run(() =>
       this.adapter.query(sql, params, options?.limit, options?.timeout),
     );
+  }
+
+  private async getSchemaPage(
+    database: string | undefined,
+    offset: number,
+    timeout: number | undefined,
+  ): Promise<Schema[]> {
+    const project = database ?? this.defaultProject;
+    const result = await this.query(
+      `
+        SELECT schema_name as dataset_name,
+               catalog_name as project_name,
+               location,
+               creation_time
+        FROM ${this.regionInformationSchemaView(project, "SCHEMATA")}
+        WHERE schema_name NOT IN ('INFORMATION_SCHEMA')
+          AND catalog_name = ?
+        ORDER BY schema_name
+        LIMIT ? OFFSET ?
+      `,
+      [project, BigQueryIntrospector.PARENT_PAGE_SIZE, offset],
+      { limit: BigQueryIntrospector.PARENT_PAGE_SIZE, timeout },
+    );
+    return result.rows.map((row) => ({
+      name: this.getString(row.dataset_name) || "",
+      database: this.getString(row.project_name) || project,
+      created: this.parseDate(row.creation_time) || new Date(),
+      metadata: {
+        project_name: this.getString(row.project_name),
+        location: this.getString(row.location),
+      },
+    }));
   }
 
   /**

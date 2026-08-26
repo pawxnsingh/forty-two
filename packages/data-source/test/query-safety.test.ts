@@ -96,30 +96,51 @@ test("serializes session-level PostgreSQL and Redshift timeouts with queries", a
   }
 });
 
-test("bounds MySQL rows in SQL and reconnects after a timed-out connection", async () => {
+test("bounds MySQL rows by streaming the original SQL and reconnects after cancellation", async () => {
   const boundedAdapter = new MySQLAdapter();
   let boundedSql = "";
   let boundedParams: unknown;
   Object.assign(boundedAdapter, {
     connected: true,
     connection: {
-      async execute(sql: string, params: unknown) {
+      query(sql: string, params: unknown) {
         boundedSql = sql;
         boundedParams = params;
-        return [[{ id: 1 }, { id: 2 }, { id: 3 }], []];
+        const listeners = new Map<string, (...args: unknown[]) => void>();
+        return {
+          on(event: string, listener: (...args: unknown[]) => void) {
+            listeners.set(event, listener);
+            return this;
+          },
+          stream() {
+            return {
+              on(event: string, listener: (...args: unknown[]) => void) {
+                if (event === "data") {
+                  listener({ id: 1 });
+                  listener({ id: 2 });
+                  listener({ id: 3 });
+                }
+                return this;
+              },
+            };
+          },
+        };
       },
+      destroy() {},
     },
   });
 
   const bounded = await boundedAdapter.query(
-    "SELECT id FROM orders WHERE id > ?;",
+    "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.id > ?; -- note",
     [0],
     2,
     1_000,
   );
-  assert.match(boundedSql, /SELECT \* FROM \(SELECT id FROM orders/);
-  assert.match(boundedSql, /LIMIT \?$/);
-  assert.deepEqual(boundedParams, [0, 3]);
+  assert.equal(
+    boundedSql,
+    "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id WHERE u.id > ?; -- note",
+  );
+  assert.deepEqual(boundedParams, [0]);
   assert.equal(bounded.rows.length, 2);
   assert.equal(bounded.hasMoreRows, true);
 
@@ -135,7 +156,11 @@ test("bounds MySQL rows in SQL and reconnects after a timed-out connection", asy
       password: "secret",
     },
     connection: {
-      execute: () => new Promise(() => undefined),
+      execute: (
+        _sql: string,
+        _params: unknown,
+        _callback: (...args: unknown[]) => void,
+      ) => undefined,
       destroy: () => {
         destroyed = true;
       },
@@ -145,8 +170,12 @@ test("bounds MySQL rows in SQL and reconnects after a timed-out connection", asy
     Object.assign(recoveryAdapter, {
       connected: true,
       connection: {
-        async execute() {
-          return [[{ ok: 1 }], []];
+        execute(
+          _sql: string,
+          _params: unknown,
+          callback: (...args: unknown[]) => void,
+        ) {
+          callback(null, [{ ok: 1 }], []);
         },
       },
     });
@@ -202,19 +231,24 @@ test("pushes discovery limits into MySQL metadata work without per-table fanout"
   assert.equal(tables[0]?.rowCount, 7);
 });
 
-test("stops Snowflake cross-database discovery once the global limit is met", async () => {
+test("Snowflake sparse discovery scans later and inaccessible databases", async () => {
   const calls: Array<{ sql: string; maxRows: number | undefined }> = [];
   const adapter = {
     async query(sql: string, _params: unknown, maxRows: number | undefined) {
       calls.push({ sql, maxRows });
+      if (sql.includes('"DB_1".INFORMATION_SCHEMA.TABLES')) {
+        throw new Error("inaccessible database");
+      }
       const rows = sql.includes("SHOW DATABASES")
-        ? Array.from({ length: 5 }, (_, index) => ({ name: `DB_${index}` }))
-        : Array.from({ length: 5 }, (_, index) => ({
-            TABLE_CATALOG: "DB_0",
-            TABLE_SCHEMA: "PUBLIC",
-            TABLE_NAME: `TABLE_${index}`,
-            TABLE_TYPE: "BASE TABLE",
-          }));
+        ? Array.from({ length: 3 }, (_, index) => ({ name: `DB_${index}` }))
+        : sql.includes('"DB_2".INFORMATION_SCHEMA.TABLES')
+          ? Array.from({ length: 3 }, (_, index) => ({
+              TABLE_CATALOG: "DB_0",
+              TABLE_SCHEMA: "PUBLIC",
+              TABLE_NAME: `TABLE_${index}`,
+              TABLE_TYPE: "BASE TABLE",
+            }))
+          : [];
       const limited = maxRows === undefined ? rows : rows.slice(0, maxRows);
       return { rows: limited, fields: [], rowCount: limited.length };
     },
@@ -229,11 +263,61 @@ test("stops Snowflake cross-database discovery once the global limit is met", as
   assert.equal(
     calls.filter((call) => call.sql.includes("INFORMATION_SCHEMA.TABLES"))
       .length,
-    1,
+    3,
   );
+  assert.ok(
+    calls.some((call) => call.sql.includes('"DB_2".INFORMATION_SCHEMA.TABLES')),
+  );
+});
+
+test("BigQuery sparse table discovery scans later datasets", async () => {
+  const queries: string[] = [];
+  const adapter = {
+    async query(sql: string) {
+      queries.push(sql);
+      let rows: Record<string, unknown>[] = [];
+      if (sql.includes("INFORMATION_SCHEMA.SCHEMATA")) {
+        rows = Array.from({ length: 3 }, (_, index) => ({
+          dataset_name: `dataset-${index}`,
+          project_name: "project-a",
+        }));
+      } else if (sql.includes("dataset-1.INFORMATION_SCHEMA.TABLES")) {
+        throw new Error("inaccessible dataset");
+      } else if (sql.includes("dataset-2.INFORMATION_SCHEMA.TABLES")) {
+        rows = [
+          {
+            project_name: "project-a",
+            dataset_name: "dataset-2",
+            table_name: "orders",
+            table_type: "BASE TABLE",
+          },
+        ];
+      } else if (sql.includes(".__TABLES__`")) {
+        rows = [{ table_id: "orders", row_count: 1, size_bytes: 10 }];
+      }
+      return { rows, fields: [], rowCount: rows.length };
+    },
+  } as unknown as DatabaseAdapter;
+  const introspector = new BigQueryIntrospector(
+    "analytics",
+    adapter,
+    "project-a",
+    "US",
+  );
+
+  const tables = await introspector.getTables(undefined, undefined, {
+    limit: 2,
+    timeout: 1_234,
+  });
+
   assert.deepEqual(
-    calls.map((call) => call.maxRows),
-    [3, 3],
+    tables.map((table) => table.name),
+    ["orders"],
+  );
+  assert.ok(
+    queries.some((query) =>
+      query.includes("dataset-2.INFORMATION_SCHEMA.TABLES"),
+    ),
   );
 });
 

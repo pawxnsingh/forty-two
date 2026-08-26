@@ -29,4 +29,4 @@ RUN pnpm --filter @forty-two/data-source-mcp... build
 ENV NODE_ENV=production
 EXPOSE 8791
 
-CMD ["pnpm", "--filter", "@forty-two/data-source-mcp", "start"]
+CMD ["node", "apps/data-source-mcp/dist/index.js"]

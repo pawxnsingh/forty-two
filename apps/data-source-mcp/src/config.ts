@@ -57,7 +57,7 @@ export function loadServerConfig(
         : Number(environment.SHUTDOWN_TIMEOUT_MS),
       DEFAULT_SHUTDOWN_TIMEOUT_MS,
       1_000,
-      60_000,
+      20_000,
       "SHUTDOWN_TIMEOUT_MS",
     ),
     connections: parseConnections(environment.DATA_SOURCE_CONNECTIONS_JSON),

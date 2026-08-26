@@ -40,6 +40,7 @@ async function shutdown(signal: string): Promise<void> {
 
   try {
     await Promise.race([cleanup, deadline]);
+    console.log("Data-source MCP shutdown complete");
   } catch (error) {
     httpServer.closeAllConnections();
     throw error;
