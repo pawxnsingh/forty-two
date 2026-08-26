@@ -2,11 +2,12 @@ import { createServer } from "node:http";
 
 import { loadServerConfig } from "./config.js";
 import { ConnectionRegistry } from "./connection-registry.js";
-import { createHttpApp } from "./http-server.js";
+import { createHttpApp, HttpRequestLifecycle } from "./http-server.js";
 
 const config = loadServerConfig();
 const registry = new ConnectionRegistry(config.connections);
-const app = createHttpApp(config, registry);
+const lifecycle = new HttpRequestLifecycle();
+const app = createHttpApp(config, registry, lifecycle);
 const httpServer = createServer(app);
 
 httpServer.listen(config.port, config.host, () => {
@@ -21,10 +22,30 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`Received ${signal}; shutting down data-source MCP`);
 
-  await new Promise<void>((resolve, reject) => {
+  const serverClosed = new Promise<void>((resolve, reject) => {
     httpServer.close((error) => (error ? reject(error) : resolve()));
   });
-  await registry.close();
+  const cleanup = Promise.all([
+    lifecycle.beginShutdown(),
+    registry.close(),
+    serverClosed,
+  ]).then(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Shutdown drain deadline exceeded")),
+      config.shutdownTimeoutMs,
+    );
+  });
+
+  try {
+    await Promise.race([cleanup, deadline]);
+  } catch (error) {
+    httpServer.closeAllConnections();
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

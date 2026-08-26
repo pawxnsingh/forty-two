@@ -1,6 +1,7 @@
 import type { DataSourceIntrospector } from "../introspection/base.js";
 import type { Credentials } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { isValidCredentials } from "../utils/validate-credentials.js";
 
 /**
  * Field/column metadata for query results
@@ -137,9 +138,9 @@ export abstract class BaseAdapter implements DatabaseAdapter {
     credentials: Credentials,
     expectedType: string,
   ): void {
-    if (credentials.type !== expectedType) {
+    if (credentials.type !== expectedType || !isValidCredentials(credentials)) {
       throw new Error(
-        `Invalid credentials type. Expected ${expectedType}, got ${credentials.type}`,
+        `Invalid credentials. Expected a valid ${expectedType} configuration, got ${credentials.type}`,
       );
     }
   }

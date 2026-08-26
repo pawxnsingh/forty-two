@@ -40,6 +40,8 @@ services:
       HOST: 0.0.0.0
       PORT: 8791
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-}"
+      SHUTDOWN_TIMEOUT_MS: ${DATA_SOURCE_MCP_SHUTDOWN_TIMEOUT_MS:-15000}
       DATA_SOURCE_CONNECTIONS_JSON: "${DATA_SOURCE_CONNECTIONS_JSON:-[]}"
     ports:
       - "127.0.0.1:${DATA_SOURCE_MCP_PORT:-8791}:8791"
@@ -55,7 +57,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
-    stop_grace_period: 20s
+    stop_grace_period: 25s
     restart: unless-stopped
 
   trueforge:

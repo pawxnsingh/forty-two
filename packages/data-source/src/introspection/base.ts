@@ -11,6 +11,11 @@ import type {
   View,
 } from "../types/introspection.js";
 
+export interface IntrospectionQueryOptions {
+  limit?: number;
+  timeout?: number;
+}
+
 /**
  * Base interface for data source introspection capabilities
  */
@@ -18,17 +23,24 @@ export interface DataSourceIntrospector {
   /**
    * Get all databases in the data source
    */
-  getDatabases(): Promise<Database[]>;
+  getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]>;
 
   /**
    * Get all schemas in a database (or all schemas if no database specified)
    */
-  getSchemas(database?: string): Promise<Schema[]>;
+  getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]>;
 
   /**
    * Get all tables in a schema (or all tables if no schema/database specified)
    */
-  getTables(database?: string, schema?: string): Promise<Table[]>;
+  getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]>;
 
   /**
    * Get all columns in a table (or all columns if no table/schema/database specified)
@@ -100,9 +112,18 @@ export abstract class BaseIntrospector implements DataSourceIntrospector {
     this.dataSourceName = dataSourceName;
   }
 
-  abstract getDatabases(): Promise<Database[]>;
-  abstract getSchemas(database?: string): Promise<Schema[]>;
-  abstract getTables(database?: string, schema?: string): Promise<Table[]>;
+  abstract getDatabases(
+    options?: IntrospectionQueryOptions,
+  ): Promise<Database[]>;
+  abstract getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]>;
+  abstract getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]>;
   abstract getColumns(
     database?: string,
     schema?: string,

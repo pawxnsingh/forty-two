@@ -4,7 +4,12 @@ import test from "node:test";
 import type { DatabaseAdapter } from "../src/adapters/base.js";
 import { BigQueryAdapter } from "../src/adapters/bigquery.js";
 import { convertPositionalPlaceholders } from "../src/adapters/helpers/positional-placeholders.js";
+import { MySQLAdapter } from "../src/adapters/mysql.js";
+import { PostgreSQLAdapter } from "../src/adapters/postgresql.js";
+import { RedshiftAdapter } from "../src/adapters/redshift.js";
 import { BigQueryIntrospector } from "../src/introspection/bigquery.js";
+import { MySQLIntrospector } from "../src/introspection/mysql.js";
+import { SnowflakeIntrospector } from "../src/introspection/snowflake.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -61,6 +66,175 @@ test("validates query timeout before SQL interpolation", () => {
   for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
     assert.throws(() => resolveQueryTimeout(invalid));
   }
+});
+
+test("serializes session-level PostgreSQL and Redshift timeouts with queries", async () => {
+  for (const adapter of [new PostgreSQLAdapter(), new RedshiftAdapter()]) {
+    const calls: string[] = [];
+    const client = {
+      async query(sql: string) {
+        calls.push(sql);
+        if (sql === "SELECT 'first'") {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        return { rows: [], fields: [], rowCount: 0 };
+      },
+    };
+    Object.assign(adapter, { client, connected: true });
+
+    await Promise.all([
+      adapter.query("SELECT 'first'", undefined, undefined, 1_000),
+      adapter.query("SELECT 'second'", undefined, undefined, 2_000),
+    ]);
+
+    assert.deepEqual(calls, [
+      "SET statement_timeout = 1000",
+      "SELECT 'first'",
+      "SET statement_timeout = 2000",
+      "SELECT 'second'",
+    ]);
+  }
+});
+
+test("bounds MySQL rows in SQL and reconnects after a timed-out connection", async () => {
+  const boundedAdapter = new MySQLAdapter();
+  let boundedSql = "";
+  let boundedParams: unknown;
+  Object.assign(boundedAdapter, {
+    connected: true,
+    connection: {
+      async execute(sql: string, params: unknown) {
+        boundedSql = sql;
+        boundedParams = params;
+        return [[{ id: 1 }, { id: 2 }, { id: 3 }], []];
+      },
+    },
+  });
+
+  const bounded = await boundedAdapter.query(
+    "SELECT id FROM orders WHERE id > ?;",
+    [0],
+    2,
+    1_000,
+  );
+  assert.match(boundedSql, /SELECT \* FROM \(SELECT id FROM orders/);
+  assert.match(boundedSql, /LIMIT \?$/);
+  assert.deepEqual(boundedParams, [0, 3]);
+  assert.equal(bounded.rows.length, 2);
+  assert.equal(bounded.hasMoreRows, true);
+
+  const recoveryAdapter = new MySQLAdapter();
+  let destroyed = false;
+  Object.assign(recoveryAdapter, {
+    connected: true,
+    credentials: {
+      type: DataSourceType.MySQL,
+      host: "db",
+      default_database: "app",
+      username: "reader",
+      password: "secret",
+    },
+    connection: {
+      execute: () => new Promise(() => undefined),
+      destroy: () => {
+        destroyed = true;
+      },
+    },
+  });
+  recoveryAdapter.initialize = async () => {
+    Object.assign(recoveryAdapter, {
+      connected: true,
+      connection: {
+        async execute() {
+          return [[{ ok: 1 }], []];
+        },
+      },
+    });
+  };
+
+  await assert.rejects(
+    recoveryAdapter.query("SELECT 1", undefined, undefined, 1),
+    /timed out/i,
+  );
+  assert.equal(destroyed, true);
+  const recovered = await recoveryAdapter.query("SELECT 1");
+  assert.deepEqual(recovered.rows, [{ ok: 1 }]);
+});
+
+test("pushes discovery limits into MySQL metadata work without per-table fanout", async () => {
+  const calls: Array<{
+    sql: string;
+    maxRows: number | undefined;
+    timeout: number | undefined;
+  }> = [];
+  const adapter = {
+    async query(
+      sql: string,
+      _params: unknown,
+      maxRows: number | undefined,
+      timeout: number | undefined,
+    ) {
+      calls.push({ sql, maxRows, timeout });
+      return {
+        rows: [
+          {
+            database_name: "app",
+            name: "orders",
+            type: "BASE TABLE",
+            row_count: 7,
+            size_bytes: 42,
+          },
+        ],
+        fields: [],
+        rowCount: 1,
+      };
+    },
+  } as unknown as DatabaseAdapter;
+
+  const tables = await new MySQLIntrospector("mysql", adapter).getTables(
+    undefined,
+    undefined,
+    { limit: 2, timeout: 1_234 },
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.maxRows, 2);
+  assert.equal(calls[0]?.timeout, 1_234);
+  assert.equal(tables[0]?.rowCount, 7);
+});
+
+test("stops Snowflake cross-database discovery once the global limit is met", async () => {
+  const calls: Array<{ sql: string; maxRows: number | undefined }> = [];
+  const adapter = {
+    async query(sql: string, _params: unknown, maxRows: number | undefined) {
+      calls.push({ sql, maxRows });
+      const rows = sql.includes("SHOW DATABASES")
+        ? Array.from({ length: 5 }, (_, index) => ({ name: `DB_${index}` }))
+        : Array.from({ length: 5 }, (_, index) => ({
+            TABLE_CATALOG: "DB_0",
+            TABLE_SCHEMA: "PUBLIC",
+            TABLE_NAME: `TABLE_${index}`,
+            TABLE_TYPE: "BASE TABLE",
+          }));
+      const limited = maxRows === undefined ? rows : rows.slice(0, maxRows);
+      return { rows: limited, fields: [], rowCount: limited.length };
+    },
+  } as unknown as DatabaseAdapter;
+
+  const tables = await new SnowflakeIntrospector(
+    "snowflake",
+    adapter,
+  ).getTables(undefined, undefined, { limit: 3, timeout: 1_234 });
+
+  assert.equal(tables.length, 3);
+  assert.equal(
+    calls.filter((call) => call.sql.includes("INFORMATION_SCHEMA.TABLES"))
+      .length,
+    1,
+  );
+  assert.deepEqual(
+    calls.map((call) => call.maxRows),
+    [3, 3],
+  );
 });
 
 test("replaces only real positional placeholders", () => {
@@ -254,7 +428,10 @@ test("BigQuery normalizes blank, multi-region, and regional locations", async ()
   await adapter.initialize({
     type: DataSourceType.BigQuery,
     project_id: "project-a",
-    service_account_key: {},
+    service_account_key: {
+      client_email: "reader@project-a.iam.gserviceaccount.com",
+      private_key: "test-private-key",
+    },
     location: "   ",
   });
   const queries: string[] = [];

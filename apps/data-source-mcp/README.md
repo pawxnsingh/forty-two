@@ -12,7 +12,14 @@ POST /mcp       Streamable HTTP MCP endpoint
 GET  /healthz   unauthenticated container health check
 ```
 
-`/mcp` requires `Authorization: Bearer <MCP_AUTH_TOKEN>`.
+`/mcp` requires `Authorization: Bearer <MCP_AUTH_TOKEN>`. Requests carrying an
+`Origin` header are rejected unless that exact HTTP(S) origin appears in the
+comma-separated `MCP_ALLOWED_ORIGINS` setting. Requests without `Origin`, such
+as normal container-to-container calls, remain allowed.
+
+Shutdown stops new HTTP admission, closes active MCP transports and database
+adapters, and drains for `SHUTDOWN_TIMEOUT_MS` (15 seconds by default) before
+the process exits. The Compose grace period is longer than this deadline.
 
 ## Local connection configuration
 

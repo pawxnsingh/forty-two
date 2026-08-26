@@ -10,7 +10,7 @@ import type {
   TableStatistics,
   View,
 } from "../types/introspection.js";
-import { BaseIntrospector } from "./base.js";
+import { BaseIntrospector, type IntrospectionQueryOptions } from "./base.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -50,17 +50,18 @@ export class RedshiftIntrospector extends BaseIntrospector {
     return Date.now() - lastFetched.getTime() < this.CACHE_TTL;
   }
 
-  async getDatabases(): Promise<Database[]> {
+  async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
     // Check if we have valid cached data
     if (
       this.cache.databases &&
       this.isCacheValid(this.cache.databases.lastFetched)
     ) {
-      return this.cache.databases.data;
+      return this.cache.databases.data.slice(0, options?.limit);
     }
 
     try {
-      const databasesResult = await this.adapter.query(`
+      const databasesResult = await this.adapter.query(
+        `
         SELECT datname as name,
                pg_catalog.pg_get_userbyid(datdba) as owner,
                datcollate as collation,
@@ -68,7 +69,11 @@ export class RedshiftIntrospector extends BaseIntrospector {
         FROM pg_catalog.pg_database
         WHERE datistemplate = false
         ORDER BY datname
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const databases = databasesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -79,7 +84,9 @@ export class RedshiftIntrospector extends BaseIntrospector {
         },
       }));
 
-      this.cache.databases = { data: databases, lastFetched: new Date() };
+      if (!options?.limit) {
+        this.cache.databases = { data: databases, lastFetched: new Date() };
+      }
       return databases;
     } catch (error) {
       console.warn("Failed to fetch Redshift databases:", error);
@@ -87,14 +94,17 @@ export class RedshiftIntrospector extends BaseIntrospector {
     }
   }
 
-  async getSchemas(database?: string): Promise<Schema[]> {
+  async getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]> {
     // Check if we have valid cached data and no filters
     if (
       !database &&
       this.cache.schemas &&
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
-      return this.cache.schemas.data;
+      return this.cache.schemas.data.slice(0, options?.limit);
     }
 
     // If we have cached data and filters, use cached data
@@ -103,9 +113,10 @@ export class RedshiftIntrospector extends BaseIntrospector {
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
       const schemas = this.cache.schemas.data;
-      return database
+      const filtered = database
         ? schemas.filter((schema) => schema.database === database)
         : schemas;
+      return filtered.slice(0, options?.limit);
     }
 
     try {
@@ -116,14 +127,19 @@ export class RedshiftIntrospector extends BaseIntrospector {
         whereClause += ` AND catalog_name = ${quoteStringLiteral(database)}`;
       }
 
-      const schemasResult = await this.adapter.query(`
+      const schemasResult = await this.adapter.query(
+        `
         SELECT schema_name as name,
                catalog_name as database,
                schema_owner as owner
         FROM information_schema.schemata
         ${whereClause}
         ORDER BY schema_name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const schemas = schemasResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -132,7 +148,7 @@ export class RedshiftIntrospector extends BaseIntrospector {
       }));
 
       // Only cache if we fetched all schemas (no database filter)
-      if (!database) {
+      if (!database && !options?.limit) {
         this.cache.schemas = { data: schemas, lastFetched: new Date() };
       }
 
@@ -143,7 +159,11 @@ export class RedshiftIntrospector extends BaseIntrospector {
     }
   }
 
-  async getTables(database?: string, schema?: string): Promise<Table[]> {
+  async getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]> {
     // Check if we have valid cached data and no filters
     if (
       !database &&
@@ -151,7 +171,7 @@ export class RedshiftIntrospector extends BaseIntrospector {
       this.cache.tables &&
       this.isCacheValid(this.cache.tables.lastFetched)
     ) {
-      return this.cache.tables.data;
+      return this.cache.tables.data.slice(0, options?.limit);
     }
 
     // If we have cached data and filters, use cached data
@@ -168,7 +188,7 @@ export class RedshiftIntrospector extends BaseIntrospector {
         tables = tables.filter((table) => table.schema === schema);
       }
 
-      return tables;
+      return tables.slice(0, options?.limit);
     }
 
     try {
@@ -183,7 +203,8 @@ export class RedshiftIntrospector extends BaseIntrospector {
         whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
       }
 
-      const tablesResult = await this.adapter.query(`
+      const tablesResult = await this.adapter.query(
+        `
         SELECT table_catalog as database,
                table_schema as schema,
                table_name as name,
@@ -192,7 +213,11 @@ export class RedshiftIntrospector extends BaseIntrospector {
         ${whereClause}
         AND table_type != 'VIEW'
         ORDER BY schema, name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const tables = tablesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -201,38 +226,46 @@ export class RedshiftIntrospector extends BaseIntrospector {
         type: this.mapTableType(this.getString(row.type)),
       }));
 
-      // Enhance tables with basic statistics
-      const tablesWithStats = await Promise.all(
-        tables.map(async (table) => {
-          try {
-            const tableStatsResult = await this.adapter.query(
-              `
-              SELECT tbl_rows as row_count,
-                     size as size_bytes
+      let tablesWithStats = tables;
+      if (tables.length > 0) {
+        try {
+          const predicates = tables.map(
+            (_, index) =>
+              `(schema = $${index * 2 + 1} AND "table" = $${index * 2 + 2})`,
+          );
+          const params = tables.flatMap((table) => [table.schema, table.name]);
+          const result = await this.adapter.query(
+            `
+              SELECT schema, "table" as table_name,
+                     tbl_rows as row_count, size as size_bytes
               FROM svv_table_info
-              WHERE schema = $1 AND "table" = $2
+              WHERE ${predicates.join(" OR ")}
             `,
-              [table.schema, table.name],
-            );
-
-            const stats = tableStatsResult.rows[0];
+            params,
+            tables.length,
+            options?.timeout,
+          );
+          const stats = new Map(
+            result.rows.map((row) => [
+              `${this.getString(row.schema)}.${this.getString(row.table_name)}`,
+              row,
+            ]),
+          );
+          tablesWithStats = tables.map((table) => {
+            const row = stats.get(`${table.schema}.${table.name}`);
             return {
               ...table,
-              rowCount: this.parseNumber(stats?.row_count) ?? 0,
-              sizeBytes: this.parseNumber(stats?.size_bytes) ?? 0,
+              rowCount: this.parseNumber(row?.row_count) ?? 0,
+              sizeBytes: this.parseNumber(row?.size_bytes) ?? 0,
             };
-          } catch (error) {
-            console.warn(
-              `Failed to get stats for table ${table.schema}.${table.name}:`,
-              error,
-            );
-            return table;
-          }
-        }),
-      );
+          });
+        } catch (error) {
+          console.warn("Failed to fetch Redshift table statistics:", error);
+        }
+      }
 
       // Only cache if we fetched all tables (no filters)
-      if (!database && !schema) {
+      if (!database && !schema && !options?.limit) {
         this.cache.tables = { data: tablesWithStats, lastFetched: new Date() };
       }
 

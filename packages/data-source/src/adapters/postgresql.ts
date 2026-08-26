@@ -14,6 +14,7 @@ import {
   BaseAdapter,
   type FieldMetadata,
 } from "./base.js";
+import { AsyncMutex } from "./helpers/async-mutex.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { mapPostgreSQLType } from "./type-mappings/postgresql.js";
 
@@ -36,6 +37,7 @@ interface CursorWithResult extends Cursor {
 export class PostgreSQLAdapter extends BaseAdapter {
   private client?: Client | undefined;
   private introspector?: PostgreSQLIntrospector;
+  private readonly queryMutex = new AsyncMutex();
 
   async initialize(credentials: Credentials): Promise<void> {
     this.validateCredentials(credentials, DataSourceType.PostgreSQL);
@@ -95,6 +97,17 @@ export class PostgreSQLAdapter extends BaseAdapter {
   }
 
   async query(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(() =>
+      this.queryExclusive(sql, params, maxRows, timeout),
+    );
+  }
+
+  private async queryExclusive(
     sql: string,
     params?: QueryParameter[],
     maxRows?: number,
@@ -257,6 +270,16 @@ export class PostgreSQLAdapter extends BaseAdapter {
    * Execute a write operation (INSERT, UPDATE, DELETE)
    */
   override async executeWrite(
+    sql: string,
+    params?: QueryParameter[],
+    timeout?: number,
+  ): Promise<{ rowCount: number }> {
+    return this.queryMutex.runExclusive(() =>
+      this.executeWriteExclusive(sql, params, timeout),
+    );
+  }
+
+  private async executeWriteExclusive(
     sql: string,
     params?: QueryParameter[],
     timeout?: number,

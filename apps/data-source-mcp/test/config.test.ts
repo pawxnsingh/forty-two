@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadServerConfig, parseConnections } from "../src/config.js";
+import {
+  loadServerConfig,
+  parseAllowedOrigins,
+  parseConnections,
+} from "../src/config.js";
 
 test("requires a service authentication token", () => {
   assert.throws(() => loadServerConfig({}), /MCP_AUTH_TOKEN is required/);
@@ -28,11 +32,101 @@ test("loads server-side connection configuration without exposing defaults", () 
   });
 
   assert.equal(config.port, 9000);
+  assert.deepEqual(config.allowedOrigins, []);
+  assert.equal(config.shutdownTimeoutMs, 15_000);
   assert.equal(config.connections[0]?.name, "analytics");
   assert.deepEqual(config.connections[0]?.policy, {
     maxRows: 250,
     queryTimeoutMs: 15_000,
   });
+});
+
+test("normalizes explicit browser origins and rejects URL-like impostors", () => {
+  assert.deepEqual(
+    parseAllowedOrigins("https://Example.com:443,http://localhost:3000"),
+    ["https://example.com", "http://localhost:3000"],
+  );
+  for (const invalid of [
+    "*",
+    "example.com",
+    "https://example.com/path",
+    "https://user@example.com",
+    "https://example.com,",
+  ]) {
+    assert.throws(() => parseAllowedOrigins(invalid), /invalid|empty/i);
+  }
+});
+
+test("rejects credentials that could change connector security behavior", () => {
+  const invalidCredentials = [
+    {
+      type: "bigquery",
+      project_id: "project-a",
+      service_account_key: true,
+    },
+    {
+      type: "bigquery",
+      project_id: "project-a",
+      service_account_key: "{}",
+    },
+    {
+      type: "postgres",
+      host: "db",
+      default_database: "app",
+      username: "reader",
+      password: "secret",
+      ssl: { rejectUnauthorized: "false" },
+    },
+    {
+      type: "mysql",
+      host: "db",
+      default_database: "app",
+      username: "reader",
+      password: "secret",
+      connection_timeout: "1000",
+    },
+    {
+      type: "sqlserver",
+      server: "db",
+      default_database: "app",
+      username: "reader",
+      password: "secret",
+      encrypt: "false",
+    },
+    {
+      type: "redshift",
+      host: "db",
+      default_database: "app",
+      username: "reader",
+      password: "secret",
+      ssl: {},
+    },
+    {
+      type: "snowflake",
+      account_id: "account",
+      warehouse_id: "warehouse",
+      username: "reader",
+      password: "secret",
+      default_database: "app",
+      custom_host: true,
+    },
+  ];
+
+  for (const credentials of invalidCredentials) {
+    assert.throws(
+      () =>
+        parseConnections(
+          JSON.stringify([
+            {
+              name: "hostile",
+              type: credentials.type,
+              credentials,
+            },
+          ]),
+        ),
+      /invalid credentials/i,
+    );
+  }
 });
 
 test("rejects duplicate, invalid, and mismatched connections", () => {

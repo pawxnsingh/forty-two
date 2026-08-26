@@ -13,6 +13,7 @@ import {
   BaseAdapter,
   type FieldMetadata,
 } from "./base.js";
+import { AsyncMutex } from "./helpers/async-mutex.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { mapMySQLType } from "./type-mappings/mysql.js";
 
@@ -22,6 +23,7 @@ import { mapMySQLType } from "./type-mappings/mysql.js";
 export class MySQLAdapter extends BaseAdapter {
   private connection?: mysql.Connection | undefined;
   private introspector?: MySQLIntrospector;
+  private readonly queryMutex = new AsyncMutex();
 
   private async executeWithTimeout<T>(
     operation: Promise<T>,
@@ -101,23 +103,35 @@ export class MySQLAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(() =>
+      this.queryExclusive(sql, params, maxRows, timeout),
+    );
+  }
+
+  private async queryExclusive(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
     const timeoutMs = resolveQueryTimeout(timeout);
-    this.ensureConnected();
+    await this.ensureUsableConnection();
 
     if (!this.connection) {
       throw new Error("MySQL connection not initialized");
     }
 
     try {
-      // For MySQL, use Promise.race() to implement timeout since mysql2
-      // doesn't support per-query timeouts on existing connections
-      // MySQL2 with promise connections doesn't support true streaming.
-      // We execute the full query and limit results in memory.
-      // This means the database still processes the full result set,
-      // but we protect the application memory by only keeping maxRows.
-      // For true streaming support, you would need to use the callback-based API.
+      const shouldBoundRows = maxRows !== undefined && maxRows > 0;
+      const executableSql = shouldBoundRows
+        ? `SELECT * FROM (${sql.trim().replace(/;+\s*$/, "")}) AS \`__forty_two_bounded\` LIMIT ?`
+        : sql;
+      const executableParams = shouldBoundRows
+        ? [...(params ?? []), maxRows + 1]
+        : params;
+
       const [rows, fields] = await this.executeWithTimeout(
-        this.connection.execute(sql, params),
+        this.connection.execute(executableSql, executableParams),
         timeoutMs,
       );
 
@@ -220,8 +234,18 @@ export class MySQLAdapter extends BaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }> {
+    return this.queryMutex.runExclusive(() =>
+      this.executeWriteExclusive(sql, params, timeout),
+    );
+  }
+
+  private async executeWriteExclusive(
+    sql: string,
+    params?: QueryParameter[],
+    timeout?: number,
+  ): Promise<{ rowCount: number }> {
     const timeoutMs = resolveQueryTimeout(timeout);
-    this.ensureConnected();
+    await this.ensureUsableConnection();
 
     if (!this.connection) {
       throw new Error("MySQL connection not initialized");
@@ -249,5 +273,15 @@ export class MySQLAdapter extends BaseAdapter {
         `MySQL write operation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
     }
+  }
+
+  private async ensureUsableConnection(): Promise<void> {
+    if (this.connected && this.connection) return;
+    if (!this.credentials) {
+      throw new Error(
+        "MySQL adapter is not connected. Call initialize() first.",
+      );
+    }
+    await this.initialize(this.credentials);
   }
 }

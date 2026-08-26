@@ -11,7 +11,7 @@ import type {
   TableStatistics,
   View,
 } from "../types/introspection.js";
-import { BaseIntrospector } from "./base.js";
+import { BaseIntrospector, type IntrospectionQueryOptions } from "./base.js";
 import { ConcurrencyLimiter, mapWithConcurrency } from "./concurrency.js";
 import {
   quoteIdentifier,
@@ -61,30 +61,33 @@ export class BigQueryIntrospector extends BaseIntrospector {
     return Date.now() - lastFetched.getTime() < this.CACHE_TTL;
   }
 
-  async getDatabases(): Promise<Database[]> {
+  async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
     // Check if we have valid cached data
     if (
       this.cache.databases &&
       this.isCacheValid(this.cache.databases.lastFetched)
     ) {
-      return this.cache.databases.data;
+      return this.cache.databases.data.slice(0, options?.limit);
     }
 
     const databases: Database[] = [
       this.createProjectDatabase(this.defaultProject),
     ];
     this.cache.databases = { data: databases, lastFetched: new Date() };
-    return databases;
+    return databases.slice(0, options?.limit);
   }
 
-  async getSchemas(database?: string): Promise<Schema[]> {
+  async getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]> {
     // Only use cache if no filter is applied
     if (
       !database &&
       this.cache.schemas &&
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
-      return this.cache.schemas.data;
+      return this.cache.schemas.data.slice(0, options?.limit);
     }
 
     try {
@@ -102,7 +105,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
 
       query += " ORDER BY schema_name";
 
-      const datasetsResult = await this.query(query);
+      const datasetsResult = await this.query(query, undefined, options);
 
       const schemas = datasetsResult.rows.map((row) => ({
         name: this.getString(row.dataset_name) || "",
@@ -115,7 +118,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
       }));
 
       // Only cache if no filter was applied
-      if (!database) {
+      if (!database && !options?.limit) {
         this.cache.schemas = { data: schemas, lastFetched: new Date() };
       }
 
@@ -126,20 +129,33 @@ export class BigQueryIntrospector extends BaseIntrospector {
     }
   }
 
-  async getTables(database?: string, schema?: string): Promise<Table[]> {
+  async getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]> {
     if (!schema) {
-      const schemas = await this.getSchemas(database);
-      const tables = await mapWithConcurrency(
-        schemas,
-        BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
-        (item) => this.getTables(item.database, item.name),
-      );
-      return tables.flat();
+      const schemas = await this.getSchemas(database, options);
+      const tables: Table[] = [];
+      for (const item of schemas) {
+        if (options?.limit !== undefined && tables.length >= options.limit)
+          break;
+        const remaining =
+          options?.limit === undefined
+            ? undefined
+            : options.limit - tables.length;
+        tables.push(
+          ...(await this.getTables(item.database, item.name, {
+            ...options,
+            limit: remaining,
+          })),
+        );
+      }
+      return tables;
     }
 
     try {
-      let whereClause =
-        "WHERE table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL')";
+      let whereClause = "WHERE table_type IN ('BASE TABLE', 'EXTERNAL')";
 
       if (database) {
         whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
@@ -148,7 +164,8 @@ export class BigQueryIntrospector extends BaseIntrospector {
         whereClause += ` AND table_schema = ${quoteStringLiteral(schema)}`;
       }
 
-      const tablesResult = await this.query(`
+      const tablesResult = await this.query(
+        `
         SELECT table_catalog as project_name,
                table_schema as dataset_name,
                table_name,
@@ -158,7 +175,10 @@ export class BigQueryIntrospector extends BaseIntrospector {
         FROM ${this.informationSchemaView(database, schema, "TABLES")}
         ${whereClause}
         ORDER BY table_schema, table_name
-      `);
+      `,
+        undefined,
+        options,
+      );
 
       const tables = tablesResult.rows
         .filter(
@@ -179,12 +199,17 @@ export class BigQueryIntrospector extends BaseIntrospector {
       if (tables.length === 0) return tables;
 
       try {
-        const statsResult = await this.query(`
+        const statsResult = await this.query(
+          `
           SELECT table_id,
                  row_count,
                  size_bytes
           FROM ${quoteQualifiedIdentifier([database ?? this.defaultProject, schema, "__TABLES__"], "bigquery")}
-        `);
+          WHERE table_id IN (${tables.map(() => "?").join(", ")})
+        `,
+          tables.map((table) => table.name),
+          options,
+        );
         const statsByTable = new Map(
           statsResult.rows.map((row) => [this.getString(row.table_id), row]),
         );
@@ -585,8 +610,11 @@ ORDER BY s.column_name`;
   private query(
     sql: string,
     params?: QueryParameter[],
+    options?: IntrospectionQueryOptions,
   ): Promise<AdapterQueryResult> {
-    return this.queryLimiter.run(() => this.adapter.query(sql, params));
+    return this.queryLimiter.run(() =>
+      this.adapter.query(sql, params, options?.limit, options?.timeout),
+    );
   }
 
   /**

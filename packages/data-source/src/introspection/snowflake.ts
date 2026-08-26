@@ -10,7 +10,7 @@ import type {
   TableStatistics,
   View,
 } from "../types/introspection.js";
-import { BaseIntrospector } from "./base.js";
+import { BaseIntrospector, type IntrospectionQueryOptions } from "./base.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -49,17 +49,22 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     return Date.now() - lastFetched.getTime() < this.CACHE_TTL;
   }
 
-  async getDatabases(): Promise<Database[]> {
+  async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
     // Check if we have valid cached data
     if (
       this.cache.databases &&
       this.isCacheValid(this.cache.databases.lastFetched)
     ) {
-      return this.cache.databases.data;
+      return this.cache.databases.data.slice(0, options?.limit);
     }
 
     try {
-      const result = await this.adapter.query("SHOW DATABASES");
+      const result = await this.adapter.query(
+        "SHOW DATABASES",
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
       const databases = result.rows.map((row) => ({
         name: this.getString(row.name) || "",
         owner: this.getString(row.owner) || "",
@@ -74,7 +79,9 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         },
       }));
 
-      this.cache.databases = { data: databases, lastFetched: new Date() };
+      if (!options?.limit) {
+        this.cache.databases = { data: databases, lastFetched: new Date() };
+      }
       return databases;
     } catch (error) {
       console.warn("Failed to fetch databases:", error);
@@ -82,16 +89,20 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     }
   }
 
-  async getSchemas(database?: string): Promise<Schema[]> {
+  async getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]> {
     // Check if we have valid cached data
     if (
       this.cache.schemas &&
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
       const schemas = this.cache.schemas.data;
-      return database
+      const filtered = database
         ? schemas.filter((schema) => schema.database === database)
         : schemas;
+      return filtered.slice(0, options?.limit);
     }
 
     try {
@@ -99,11 +110,16 @@ export class SnowflakeIntrospector extends BaseIntrospector {
 
       if (database) {
         // Fetch schemas for specific database
-        const result = await this.adapter.query(`
+        const result = await this.adapter.query(
+          `
           SELECT SCHEMA_NAME, CATALOG_NAME, SCHEMA_OWNER, COMMENT, CREATED, LAST_ALTERED
           FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.SCHEMATA
           WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
-        `);
+        `,
+          undefined,
+          options?.limit,
+          options?.timeout,
+        );
 
         schemas = result.rows.map((row) => ({
           name: this.getString(row.SCHEMA_NAME) || "",
@@ -115,38 +131,45 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         }));
       } else {
         // Fetch schemas for all accessible databases
-        const databases = await this.getDatabases();
-        const schemasPromises = databases.map(async (db) => {
+        const databases = await this.getDatabases(options);
+        for (const db of databases) {
+          if (options?.limit !== undefined && schemas.length >= options.limit)
+            break;
           try {
-            const result = await this.adapter.query(`
+            const result = await this.adapter.query(
+              `
               SELECT SCHEMA_NAME, CATALOG_NAME, SCHEMA_OWNER, COMMENT, CREATED, LAST_ALTERED
               FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.SCHEMATA
               WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
-            `);
+            `,
+              undefined,
+              options?.limit === undefined
+                ? undefined
+                : options.limit - schemas.length,
+              options?.timeout,
+            );
 
-            return result.rows.map((row) => ({
-              name: this.getString(row.SCHEMA_NAME) || "",
-              database: this.getString(row.CATALOG_NAME) || db.name,
-              owner: this.getString(row.SCHEMA_OWNER) || "",
-              comment: this.getString(row.COMMENT) || "",
-              created: this.parseDate(row.CREATED) || new Date(),
-              lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
-            }));
+            schemas.push(
+              ...result.rows.map((row) => ({
+                name: this.getString(row.SCHEMA_NAME) || "",
+                database: this.getString(row.CATALOG_NAME) || db.name,
+                owner: this.getString(row.SCHEMA_OWNER) || "",
+                comment: this.getString(row.COMMENT) || "",
+                created: this.parseDate(row.CREATED) || new Date(),
+                lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
+              })),
+            );
           } catch (error) {
             console.warn(
               `Could not access schemas in database ${db.name}:`,
               error,
             );
-            return [];
           }
-        });
-
-        const schemasResults = await Promise.all(schemasPromises);
-        schemas = schemasResults.flat();
+        }
       }
 
       // Only cache if we fetched all schemas (no database filter)
-      if (!database) {
+      if (!database && !options?.limit) {
         this.cache.schemas = { data: schemas, lastFetched: new Date() };
       }
 
@@ -157,7 +180,11 @@ export class SnowflakeIntrospector extends BaseIntrospector {
     }
   }
 
-  async getTables(database?: string, schema?: string): Promise<Table[]> {
+  async getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]> {
     // Check if we have valid cached data and no filters
     if (
       !database &&
@@ -165,7 +192,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
       this.cache.tables &&
       this.isCacheValid(this.cache.tables.lastFetched)
     ) {
-      return this.cache.tables.data;
+      return this.cache.tables.data.slice(0, options?.limit);
     }
 
     // If we have cached data and filters, use cached data
@@ -182,7 +209,7 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         tables = tables.filter((table) => table.schema === schema);
       }
 
-      return tables;
+      return tables.slice(0, options?.limit);
     }
 
     try {
@@ -190,12 +217,17 @@ export class SnowflakeIntrospector extends BaseIntrospector {
 
       if (database && schema) {
         // Fetch tables for specific database and schema
-        const result = await this.adapter.query(`
+        const result = await this.adapter.query(
+          `
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                  ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
           FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.TABLES
           WHERE TABLE_SCHEMA = ${quoteStringLiteral(schema)}
-        `);
+        `,
+          undefined,
+          options?.limit,
+          options?.timeout,
+        );
 
         tables = result.rows.map((row) => ({
           name: this.getString(row.TABLE_NAME) || "",
@@ -210,11 +242,16 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         }));
       } else if (database) {
         // Fetch tables for specific database
-        const result = await this.adapter.query(`
+        const result = await this.adapter.query(
+          `
           SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                  ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
           FROM ${quoteIdentifier(database, "snowflake")}.INFORMATION_SCHEMA.TABLES
-        `);
+        `,
+          undefined,
+          options?.limit,
+          options?.timeout,
+        );
 
         tables = result.rows.map((row) => ({
           name: this.getString(row.TABLE_NAME) || "",
@@ -229,41 +266,48 @@ export class SnowflakeIntrospector extends BaseIntrospector {
         }));
       } else {
         // Fetch tables for all accessible databases
-        const databases = await this.getDatabases();
-        const tablesPromises = databases.map(async (db) => {
+        const databases = await this.getDatabases(options);
+        for (const db of databases) {
+          if (options?.limit !== undefined && tables.length >= options.limit)
+            break;
           try {
-            const result = await this.adapter.query(`
+            const result = await this.adapter.query(
+              `
               SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE,
                      ROW_COUNT, BYTES, COMMENT, CREATED, LAST_ALTERED
               FROM ${quoteIdentifier(db.name, "snowflake")}.INFORMATION_SCHEMA.TABLES
-            `);
+            `,
+              undefined,
+              options?.limit === undefined
+                ? undefined
+                : options.limit - tables.length,
+              options?.timeout,
+            );
 
-            return result.rows.map((row) => ({
-              name: this.getString(row.TABLE_NAME) || "",
-              schema: this.getString(row.TABLE_SCHEMA) || "",
-              database: this.getString(row.TABLE_CATALOG) || db.name,
-              type: this.mapTableType(this.getString(row.TABLE_TYPE)),
-              rowCount: this.parseNumber(row.ROW_COUNT) ?? 0,
-              sizeBytes: this.parseNumber(row.BYTES) ?? 0,
-              comment: this.getString(row.COMMENT) || "",
-              created: this.parseDate(row.CREATED) || new Date(),
-              lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
-            }));
+            tables.push(
+              ...result.rows.map((row) => ({
+                name: this.getString(row.TABLE_NAME) || "",
+                schema: this.getString(row.TABLE_SCHEMA) || "",
+                database: this.getString(row.TABLE_CATALOG) || db.name,
+                type: this.mapTableType(this.getString(row.TABLE_TYPE)),
+                rowCount: this.parseNumber(row.ROW_COUNT) ?? 0,
+                sizeBytes: this.parseNumber(row.BYTES) ?? 0,
+                comment: this.getString(row.COMMENT) || "",
+                created: this.parseDate(row.CREATED) || new Date(),
+                lastModified: this.parseDate(row.LAST_ALTERED) || new Date(),
+              })),
+            );
           } catch (error) {
             console.warn(
               `Could not access tables in database ${db.name}:`,
               error,
             );
-            return [];
           }
-        });
-
-        const tablesResults = await Promise.all(tablesPromises);
-        tables = tablesResults.flat();
+        }
       }
 
       // Only cache if we fetched all tables (no filters)
-      if (!database && !schema) {
+      if (!database && !schema && !options?.limit) {
         this.cache.tables = { data: tables, lastFetched: new Date() };
       }
 

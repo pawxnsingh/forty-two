@@ -72,8 +72,11 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, limit }) => {
       try {
-        registry.get(dataSource);
-        const values = await registry.dataSource.getDatabases(dataSource);
+        const connection = registry.get(dataSource);
+        const values = await registry.dataSource.getDatabases(dataSource, {
+          limit: limit + 1,
+          timeout: connection.policy.queryTimeoutMs,
+        });
         return toolSuccess({
           dataSource,
           databases: values.slice(0, limit),
@@ -100,10 +103,14 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, database, limit }) => {
       try {
-        registry.get(dataSource);
+        const connection = registry.get(dataSource);
         const values = await registry.dataSource.getSchemas(
           dataSource,
           database,
+          {
+            limit: limit + 1,
+            timeout: connection.policy.queryTimeoutMs,
+          },
         );
         return toolSuccess({
           dataSource,
@@ -132,11 +139,15 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, database, schema, limit }) => {
       try {
-        registry.get(dataSource);
+        const connection = registry.get(dataSource);
         const values = await registry.dataSource.getTables(
           dataSource,
           database,
           schema,
+          {
+            limit: limit + 1,
+            timeout: connection.policy.queryTimeoutMs,
+          },
         );
         return toolSuccess({
           dataSource,

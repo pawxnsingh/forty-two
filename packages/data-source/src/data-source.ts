@@ -1,6 +1,9 @@
 import type { DatabaseAdapter } from "./adapters/base.js";
 import { createAdapter } from "./adapters/factory.js";
-import type { DataSourceIntrospector } from "./introspection/base.js";
+import type {
+  DataSourceIntrospector,
+  IntrospectionQueryOptions,
+} from "./introspection/base.js";
 import type { Credentials, DataSourceType } from "./types/credentials.js";
 import type {
   Column,
@@ -55,6 +58,20 @@ function assertSafeIdentifiers(
   label: string,
 ): void {
   values?.forEach((value) => assertSafeIdentifier(value, label));
+}
+
+function resolveIntrospectionOptions(
+  options: IntrospectionQueryOptions | undefined,
+): IntrospectionQueryOptions | undefined {
+  if (!options) return undefined;
+  return {
+    ...(options.limit !== undefined
+      ? { limit: resolveMaxRows(options.limit) }
+      : {}),
+    ...(options.timeout !== undefined
+      ? { timeout: resolveQueryTimeout(options.timeout) }
+      : {}),
+  };
 }
 
 /**
@@ -283,15 +300,27 @@ export class DataSource {
 
     // Keep caller-controlled identifiers out of the introspectors' SQL builders.
     return {
-      getDatabases: () => introspector.getDatabases(),
-      getSchemas: (database?: string) => {
+      getDatabases: (options?: IntrospectionQueryOptions) =>
+        introspector.getDatabases(resolveIntrospectionOptions(options)),
+      getSchemas: (database?: string, options?: IntrospectionQueryOptions) => {
         assertSafeIdentifier(database, "database");
-        return introspector.getSchemas(database);
+        return introspector.getSchemas(
+          database,
+          resolveIntrospectionOptions(options),
+        );
       },
-      getTables: (database?: string, schema?: string) => {
+      getTables: (
+        database?: string,
+        schema?: string,
+        options?: IntrospectionQueryOptions,
+      ) => {
         assertSafeIdentifier(database, "database");
         assertSafeIdentifier(schema, "schema");
-        return introspector.getTables(database, schema);
+        return introspector.getTables(
+          database,
+          schema,
+          resolveIntrospectionOptions(options),
+        );
       },
       getColumns: (database?: string, schema?: string, table?: string) => {
         assertSafeIdentifier(database, "database");
@@ -360,9 +389,12 @@ export class DataSource {
   /**
    * Get all databases from a data source
    */
-  async getDatabases(dataSourceName?: string): Promise<Database[]> {
+  async getDatabases(
+    dataSourceName?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Database[]> {
     const introspector = await this.introspect(dataSourceName);
-    return introspector.getDatabases();
+    return introspector.getDatabases(resolveIntrospectionOptions(options));
   }
 
   /**
@@ -371,9 +403,13 @@ export class DataSource {
   async getSchemas(
     dataSourceName?: string,
     database?: string,
+    options?: IntrospectionQueryOptions,
   ): Promise<Schema[]> {
     const introspector = await this.introspect(dataSourceName);
-    return introspector.getSchemas(database);
+    return introspector.getSchemas(
+      database,
+      resolveIntrospectionOptions(options),
+    );
   }
 
   /**
@@ -383,9 +419,14 @@ export class DataSource {
     dataSourceName?: string,
     database?: string,
     schema?: string,
+    options?: IntrospectionQueryOptions,
   ): Promise<Table[]> {
     const introspector = await this.introspect(dataSourceName);
-    return introspector.getTables(database, schema);
+    return introspector.getTables(
+      database,
+      schema,
+      resolveIntrospectionOptions(options),
+    );
   }
 
   /**

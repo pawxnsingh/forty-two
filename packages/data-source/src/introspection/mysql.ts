@@ -10,7 +10,7 @@ import type {
   TableStatistics,
   View,
 } from "../types/introspection.js";
-import { BaseIntrospector } from "./base.js";
+import { BaseIntrospector, type IntrospectionQueryOptions } from "./base.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -49,25 +49,30 @@ export class MySQLIntrospector extends BaseIntrospector {
     return Date.now() - lastFetched.getTime() < this.CACHE_TTL;
   }
 
-  async getDatabases(): Promise<Database[]> {
+  async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
     // Check if we have valid cached data
     if (
       this.cache.databases &&
       this.isCacheValid(this.cache.databases.lastFetched)
     ) {
-      return this.cache.databases.data;
+      return this.cache.databases.data.slice(0, options?.limit);
     }
 
     try {
       // Enhanced query to get database metadata including default character set and collation
-      const databasesResult = await this.adapter.query(`
+      const databasesResult = await this.adapter.query(
+        `
         SELECT schema_name as name,
                default_character_set_name as charset,
                default_collation_name as collation
         FROM information_schema.schemata
         WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
         ORDER BY schema_name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const databases = databasesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -77,7 +82,9 @@ export class MySQLIntrospector extends BaseIntrospector {
         },
       }));
 
-      this.cache.databases = { data: databases, lastFetched: new Date() };
+      if (!options?.limit) {
+        this.cache.databases = { data: databases, lastFetched: new Date() };
+      }
       return databases;
     } catch (error) {
       console.warn("Failed to fetch MySQL databases:", error);
@@ -85,14 +92,17 @@ export class MySQLIntrospector extends BaseIntrospector {
     }
   }
 
-  async getSchemas(database?: string): Promise<Schema[]> {
+  async getSchemas(
+    database?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Schema[]> {
     // Only use cache if no filter is applied
     if (
       !database &&
       this.cache.schemas &&
       this.isCacheValid(this.cache.schemas.lastFetched)
     ) {
-      return this.cache.schemas.data;
+      return this.cache.schemas.data.slice(0, options?.limit);
     }
 
     try {
@@ -111,7 +121,12 @@ export class MySQLIntrospector extends BaseIntrospector {
 
       query += " ORDER BY schema_name";
 
-      const schemasResult = await this.adapter.query(query);
+      const schemasResult = await this.adapter.query(
+        query,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       // In MySQL, databases and schemas are the same concept
       const schemas = schemasResult.rows.map((row) => ({
@@ -124,7 +139,7 @@ export class MySQLIntrospector extends BaseIntrospector {
       }));
 
       // Only cache if no filter was applied
-      if (!database) {
+      if (!database && !options?.limit) {
         this.cache.schemas = { data: schemas, lastFetched: new Date() };
       }
 
@@ -135,7 +150,11 @@ export class MySQLIntrospector extends BaseIntrospector {
     }
   }
 
-  async getTables(database?: string, schema?: string): Promise<Table[]> {
+  async getTables(
+    database?: string,
+    schema?: string,
+    options?: IntrospectionQueryOptions,
+  ): Promise<Table[]> {
     try {
       const targetDatabase = database || schema;
       let whereClause =
@@ -145,17 +164,24 @@ export class MySQLIntrospector extends BaseIntrospector {
         whereClause += ` AND table_schema = ${quoteStringLiteral(targetDatabase)}`;
       }
 
-      const tablesResult = await this.adapter.query(`
+      const tablesResult = await this.adapter.query(
+        `
         SELECT table_schema as database_name,
                table_name as name,
                table_type as type,
                table_comment as comment,
                create_time as created,
-               update_time as last_modified
+               update_time as last_modified,
+               table_rows as row_count,
+               data_length + index_length as size_bytes
         FROM information_schema.tables
         ${whereClause}
         ORDER BY table_schema, table_name
-      `);
+      `,
+        undefined,
+        options?.limit,
+        options?.timeout,
+      );
 
       const tables = tablesResult.rows.map((row) => ({
         name: this.getString(row.name) || "",
@@ -165,39 +191,10 @@ export class MySQLIntrospector extends BaseIntrospector {
         comment: this.getString(row.comment) || "",
         created: this.parseDate(row.created) || new Date(),
         lastModified: this.parseDate(row.last_modified) || new Date(),
+        rowCount: this.parseNumber(row.row_count) ?? 0,
+        sizeBytes: this.parseNumber(row.size_bytes) ?? 0,
       }));
-
-      // Enhance tables with basic statistics
-      const tablesWithStats = await Promise.all(
-        tables.map(async (table) => {
-          try {
-            const tableStatsResult = await this.adapter.query(
-              `
-              SELECT table_rows as row_count,
-                     data_length + index_length as size_bytes
-              FROM information_schema.tables
-              WHERE table_schema = ? AND table_name = ?
-            `,
-              [table.database, table.name],
-            );
-
-            const stats = tableStatsResult.rows[0];
-            return {
-              ...table,
-              rowCount: this.parseNumber(stats?.row_count) ?? 0,
-              sizeBytes: this.parseNumber(stats?.size_bytes) ?? 0,
-            };
-          } catch (error) {
-            console.warn(
-              `Failed to get stats for table ${table.database}.${table.name}:`,
-              error,
-            );
-            return table;
-          }
-        }),
-      );
-
-      return tablesWithStats;
+      return tables;
     } catch (error) {
       console.warn("Failed to fetch MySQL tables:", error);
       return [];

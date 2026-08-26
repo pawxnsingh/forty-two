@@ -6,6 +6,7 @@ import {
 } from "@forty-two/data-source";
 
 const DEFAULT_PORT = 8791;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000;
 
 export interface ConnectionPolicy {
   maxRows: number;
@@ -21,6 +22,8 @@ export interface ServerConfig {
   host: string;
   port: number;
   authToken: string;
+  allowedOrigins: string[];
+  shutdownTimeoutMs: number;
   connections: ConfiguredConnection[];
 }
 
@@ -47,8 +50,55 @@ export function loadServerConfig(
     host: environment.HOST?.trim() || "0.0.0.0",
     port: parsePositiveInteger(environment.PORT, DEFAULT_PORT, "PORT"),
     authToken,
+    allowedOrigins: parseAllowedOrigins(environment.MCP_ALLOWED_ORIGINS),
+    shutdownTimeoutMs: parseBoundedInteger(
+      environment.SHUTDOWN_TIMEOUT_MS === undefined
+        ? undefined
+        : Number(environment.SHUTDOWN_TIMEOUT_MS),
+      DEFAULT_SHUTDOWN_TIMEOUT_MS,
+      1_000,
+      60_000,
+      "SHUTDOWN_TIMEOUT_MS",
+    ),
     connections: parseConnections(environment.DATA_SOURCE_CONNECTIONS_JSON),
   };
+}
+
+export function parseAllowedOrigins(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+
+  return [
+    ...new Set(
+      value.split(",").map((rawOrigin) => {
+        const candidate = rawOrigin.trim();
+        if (!candidate)
+          throw new Error("MCP_ALLOWED_ORIGINS contains an empty origin");
+
+        let parsed: URL;
+        try {
+          parsed = new URL(candidate);
+        } catch {
+          throw new Error(
+            `MCP_ALLOWED_ORIGINS contains an invalid origin: ${candidate}`,
+          );
+        }
+        if (
+          (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+          parsed.origin === "null" ||
+          parsed.pathname !== "/" ||
+          parsed.search ||
+          parsed.hash ||
+          parsed.username ||
+          parsed.password
+        ) {
+          throw new Error(
+            `MCP_ALLOWED_ORIGINS contains an invalid origin: ${candidate}`,
+          );
+        }
+        return parsed.origin;
+      }),
+    ),
+  ];
 }
 
 export function parseConnections(
