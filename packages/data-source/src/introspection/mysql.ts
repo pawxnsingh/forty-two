@@ -50,6 +50,7 @@ export class MySQLIntrospector extends BaseIntrospector {
   }
 
   async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.databases &&
@@ -96,6 +97,7 @@ export class MySQLIntrospector extends BaseIntrospector {
     database?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Schema[]> {
+    this.assertValidQueryOptions(options);
     // Only use cache if no filter is applied
     if (
       !database &&
@@ -155,6 +157,7 @@ export class MySQLIntrospector extends BaseIntrospector {
     schema?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Table[]> {
+    this.assertValidQueryOptions(options);
     try {
       const targetDatabase = database || schema;
       let whereClause =

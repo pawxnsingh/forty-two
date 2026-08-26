@@ -76,7 +76,7 @@ export interface PostgreSQLCredentials {
   port?: number;
 
   /** Database name */
-  default_database: string;
+  default_database?: string;
 
   /** Database name */
   database?: string;

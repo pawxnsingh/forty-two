@@ -63,6 +63,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
   }
 
   async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.databases &&
@@ -82,6 +83,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
     database?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Schema[]> {
+    this.assertValidQueryOptions(options);
     // Only use cache if no filter is applied
     if (
       !database &&
@@ -135,6 +137,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
     schema?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Table[]> {
+    this.assertValidQueryOptions(options);
     if (!schema) {
       const tables: Table[] = [];
       let offset = 0;

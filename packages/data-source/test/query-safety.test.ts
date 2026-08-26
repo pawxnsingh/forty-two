@@ -9,6 +9,7 @@ import { PostgreSQLAdapter } from "../src/adapters/postgresql.js";
 import { RedshiftAdapter } from "../src/adapters/redshift.js";
 import { BigQueryIntrospector } from "../src/introspection/bigquery.js";
 import { MySQLIntrospector } from "../src/introspection/mysql.js";
+import { PostgreSQLIntrospector } from "../src/introspection/postgresql.js";
 import { SnowflakeIntrospector } from "../src/introspection/snowflake.js";
 import {
   quoteIdentifier,
@@ -66,6 +67,52 @@ test("validates query timeout before SQL interpolation", () => {
   for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
     assert.throws(() => resolveQueryTimeout(invalid));
   }
+});
+
+test("accepts PostgreSQL's legacy database credential alias at every boundary", async () => {
+  const credentials = {
+    type: DataSourceType.PostgreSQL,
+    host: "127.0.0.1",
+    port: 1,
+    database: "legacy_database",
+    username: "reader",
+    password: "secret",
+    ssl: false,
+    connection_timeout: 10,
+  } as const;
+
+  assert.equal(isValidCredentials(credentials), true);
+  assert.equal(toCredentials(credentials).database, "legacy_database");
+  await assert.rejects(
+    new PostgreSQLAdapter().initialize(credentials),
+    (error: unknown) => {
+      assert.match(String(error), /Failed to initialize PostgreSQL client/);
+      assert.doesNotMatch(String(error), /Invalid credentials/);
+      return true;
+    },
+  );
+});
+
+test("rejects invalid direct introspection bounds before cold or warm cache access", async () => {
+  let queryCount = 0;
+  const adapter = {
+    async query() {
+      queryCount += 1;
+      return {
+        rows: [{ name: "one" }, { name: "two" }],
+        fields: [],
+        rowCount: 2,
+      };
+    },
+  } as unknown as DatabaseAdapter;
+  const introspector = new PostgreSQLIntrospector("postgres", adapter);
+
+  for (const limit of [0, -1, 1.5, Number.NaN, 10_001]) {
+    await assert.rejects(introspector.getDatabases({ limit }), /limit/i);
+    await assert.rejects(introspector.getDatabases({ limit }), /limit/i);
+  }
+  await assert.rejects(introspector.getDatabases({ timeout: 0 }), /timeout/i);
+  assert.equal(queryCount, 0);
 });
 
 test("serializes session-level PostgreSQL and Redshift timeouts with queries", async () => {

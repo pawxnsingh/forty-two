@@ -50,6 +50,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
   }
 
   async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.databases &&
@@ -101,6 +102,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     database?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Schema[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data and no filters
     if (
       !database &&
@@ -167,6 +169,7 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
     schema?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Table[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data and no filters
     if (
       !database &&

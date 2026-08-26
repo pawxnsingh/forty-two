@@ -112,6 +112,33 @@ export abstract class BaseIntrospector implements DataSourceIntrospector {
     this.dataSourceName = dataSourceName;
   }
 
+  protected assertValidQueryOptions(
+    options: IntrospectionQueryOptions | undefined,
+  ): void {
+    if (
+      options?.limit !== undefined &&
+      (!Number.isFinite(options.limit) ||
+        !Number.isInteger(options.limit) ||
+        options.limit <= 0 ||
+        options.limit > 10_000)
+    ) {
+      throw new Error(
+        "Introspection limit must be an integer between 1 and 10000",
+      );
+    }
+    if (
+      options?.timeout !== undefined &&
+      (!Number.isFinite(options.timeout) ||
+        !Number.isInteger(options.timeout) ||
+        options.timeout <= 0 ||
+        options.timeout > 600_000)
+    ) {
+      throw new Error(
+        "Introspection timeout must be an integer between 1 and 600000ms",
+      );
+    }
+  }
+
   abstract getDatabases(
     options?: IntrospectionQueryOptions,
   ): Promise<Database[]>;

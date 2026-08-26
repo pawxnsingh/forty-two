@@ -50,6 +50,7 @@ export class SQLServerIntrospector extends BaseIntrospector {
   }
 
   async getDatabases(options?: IntrospectionQueryOptions): Promise<Database[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.databases &&
@@ -107,6 +108,7 @@ export class SQLServerIntrospector extends BaseIntrospector {
     _database?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Schema[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data
     if (
       this.cache.schemas &&
@@ -164,6 +166,7 @@ export class SQLServerIntrospector extends BaseIntrospector {
     schema?: string,
     options?: IntrospectionQueryOptions,
   ): Promise<Table[]> {
+    this.assertValidQueryOptions(options);
     // Check if we have valid cached data and no filters
     if (
       !database &&
