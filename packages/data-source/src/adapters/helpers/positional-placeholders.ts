@@ -3,6 +3,10 @@ export interface PositionalPlaceholderConversion {
   placeholderCount: number;
 }
 
+export interface PositionalPlaceholderOptions {
+  hashLineComments?: boolean;
+}
+
 /**
  * Converts positional question-mark placeholders without touching SQL literals,
  * quoted identifiers, or comments.
@@ -11,6 +15,7 @@ export function convertPositionalPlaceholders(
   sql: string,
   valueCount: number,
   replacement: (index: number) => string,
+  options: PositionalPlaceholderOptions = {},
 ): PositionalPlaceholderConversion {
   let converted = "";
   let placeholderCount = 0;
@@ -28,7 +33,7 @@ export function convertPositionalPlaceholders(
     }
 
     // GoogleSQL accepts shell-style single-line comments.
-    if (character === "#") {
+    if (options.hashLineComments && character === "#") {
       const end = findLineEnd(sql, index + 1);
       converted += sql.slice(index, end);
       index = end;

@@ -117,6 +117,7 @@ export class BigQueryAdapter extends BaseAdapter {
         fixedSql,
         parameterValues.length,
         (index) => `@param${index}`,
+        { hashLineComments: true },
       );
       options.query = conversion.sql;
 
@@ -241,7 +242,13 @@ export class BigQueryAdapter extends BaseAdapter {
   introspect(): DataSourceIntrospector {
     this.ensureConnected();
     if (!this.introspector) {
-      this.introspector = new BigQueryIntrospector("bigquery", this);
+      const credentials = this.credentials as BigQueryCredentials;
+      this.introspector = new BigQueryIntrospector(
+        "bigquery",
+        this,
+        credentials.project_id,
+        credentials.location ?? "US",
+      );
     }
     return this.introspector;
   }

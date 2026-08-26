@@ -34,7 +34,12 @@ export class BigQueryIntrospector extends BaseIntrospector {
 
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-  constructor(dataSourceName: string, adapter: DatabaseAdapter) {
+  constructor(
+    dataSourceName: string,
+    adapter: DatabaseAdapter,
+    private readonly defaultProject: string,
+    private readonly location: string,
+  ) {
     super(dataSourceName);
     this.adapter = adapter;
   }
@@ -59,33 +64,18 @@ export class BigQueryIntrospector extends BaseIntrospector {
       return this.cache.databases.data;
     }
 
-    try {
-      // Query: Get all datasets (databases/schemas)
-      const datasetsResult = await this.adapter.query(`
-        SELECT schema_name as dataset_name,
-               catalog_name as project_name,
-               location,
-               creation_time
-        FROM INFORMATION_SCHEMA.SCHEMATA
-        WHERE schema_name NOT IN ('INFORMATION_SCHEMA')
-        ORDER BY schema_name
-      `);
-
-      const databases = datasetsResult.rows.map((row) => ({
-        name: this.getString(row.dataset_name) || "",
-        created: this.parseDate(row.creation_time) || new Date(),
+    const databases: Database[] = [
+      {
+        name: this.defaultProject,
+        created: new Date(),
         metadata: {
-          project_name: this.getString(row.project_name),
-          location: this.getString(row.location),
+          project_name: this.defaultProject,
+          location: this.location,
         },
-      }));
-
-      this.cache.databases = { data: databases, lastFetched: new Date() };
-      return databases;
-    } catch (error) {
-      console.warn("Failed to fetch BigQuery databases:", error);
-      return [];
-    }
+      },
+    ];
+    this.cache.databases = { data: databases, lastFetched: new Date() };
+    return databases;
   }
 
   async getSchemas(database?: string): Promise<Schema[]> {
@@ -99,18 +89,17 @@ export class BigQueryIntrospector extends BaseIntrospector {
     }
 
     try {
+      const project = database ?? this.defaultProject;
       let query = `
         SELECT schema_name as dataset_name,
                catalog_name as project_name,
                location,
                creation_time
-        FROM INFORMATION_SCHEMA.SCHEMATA
+        FROM ${this.regionInformationSchemaView(project, "SCHEMATA")}
         WHERE schema_name NOT IN ('INFORMATION_SCHEMA')
       `;
 
-      if (database) {
-        query += ` AND catalog_name = ${quoteStringLiteral(database)}`;
-      }
+      query += ` AND catalog_name = ${quoteStringLiteral(project)}`;
 
       query += " ORDER BY schema_name";
 
@@ -139,6 +128,14 @@ export class BigQueryIntrospector extends BaseIntrospector {
   }
 
   async getTables(database?: string, schema?: string): Promise<Table[]> {
+    if (!schema) {
+      const schemas = await this.getSchemas(database);
+      const tables = await Promise.all(
+        schemas.map((item) => this.getTables(item.database, item.name)),
+      );
+      return tables.flat();
+    }
+
     try {
       let whereClause =
         "WHERE table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL')";
@@ -157,7 +154,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
                table_type,
                creation_time,
                ddl
-        FROM INFORMATION_SCHEMA.TABLES
+        FROM ${this.informationSchemaView(database, schema, "TABLES")}
         ${whereClause}
         ORDER BY table_schema, table_name
       `);
@@ -186,7 +183,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
               `
               SELECT row_count,
                      size_bytes
-              FROM ${quoteQualifiedIdentifier([table.schema, "__TABLES__"], "bigquery")}
+              FROM ${quoteQualifiedIdentifier([table.database, table.schema, "__TABLES__"], "bigquery")}
               WHERE table_id = ?
             `,
               [table.name],
@@ -220,6 +217,14 @@ export class BigQueryIntrospector extends BaseIntrospector {
     schema?: string,
     table?: string,
   ): Promise<Column[]> {
+    if (!schema) {
+      const schemas = await this.getSchemas(database);
+      const columns = await Promise.all(
+        schemas.map((item) => this.getColumns(item.database, item.name, table)),
+      );
+      return columns.flat();
+    }
+
     try {
       let whereClause = "";
 
@@ -254,7 +259,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
                is_system_defined,
                is_partitioning_column,
                clustering_ordinal_position
-        FROM INFORMATION_SCHEMA.COLUMNS
+        FROM ${this.informationSchemaView(database, schema, "COLUMNS")}
         ${whereClause}
         ORDER BY table_schema, table_name, ordinal_position
       `);
@@ -286,6 +291,14 @@ export class BigQueryIntrospector extends BaseIntrospector {
   }
 
   async getViews(database?: string, schema?: string): Promise<View[]> {
+    if (!schema) {
+      const schemas = await this.getSchemas(database);
+      const views = await Promise.all(
+        schemas.map((item) => this.getViews(item.database, item.name)),
+      );
+      return views.flat();
+    }
+
     try {
       let whereClause = "";
 
@@ -305,7 +318,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
                table_schema as dataset_name,
                table_name as view_name,
                view_definition
-        FROM INFORMATION_SCHEMA.VIEWS
+        FROM ${this.informationSchemaView(database, schema, "VIEWS")}
         ${whereClause}
         ORDER BY table_schema, table_name
       `);
@@ -533,6 +546,28 @@ SELECT
 FROM stats s
 LEFT JOIN sample_values sv ON s.column_name = sv.column_name
 ORDER BY s.column_name`;
+  }
+
+  private informationSchemaView(
+    database: string | undefined,
+    schema: string,
+    view: "TABLES" | "COLUMNS" | "VIEWS",
+  ): string {
+    return quoteQualifiedIdentifier(
+      [database ?? this.defaultProject, schema, "INFORMATION_SCHEMA", view],
+      "bigquery",
+    );
+  }
+
+  private regionInformationSchemaView(
+    database: string,
+    view: "SCHEMATA",
+  ): string {
+    const region = this.location.toLowerCase().replace(/^region-/, "");
+    return quoteQualifiedIdentifier(
+      [database, `region-${region}`, "INFORMATION_SCHEMA", view],
+      "bigquery",
+    );
   }
 
   /**

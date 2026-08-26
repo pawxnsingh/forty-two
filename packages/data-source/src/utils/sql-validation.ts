@@ -83,12 +83,42 @@ function findSelectSideEffect(
     }
   }
 
+  if (
+    value.table_hint !== null &&
+    value.table_hint !== undefined &&
+    containsLockingTableHint(value.table_hint)
+  ) {
+    return "locking_read";
+  }
+
   for (const nestedValue of Object.values(value)) {
     const sideEffect = findSelectSideEffect(nestedValue);
     if (sideEffect) return sideEffect;
   }
 
   return undefined;
+}
+
+const LOCKING_TABLE_HINTS = new Set([
+  "HOLDLOCK",
+  "PAGLOCK",
+  "READCOMMITTEDLOCK",
+  "REPEATABLEREAD",
+  "ROWLOCK",
+  "SERIALIZABLE",
+  "TABLOCK",
+  "TABLOCKX",
+  "UPDLOCK",
+  "XLOCK",
+]);
+
+function containsLockingTableHint(value: unknown): boolean {
+  if (typeof value === "string") {
+    return LOCKING_TABLE_HINTS.has(value.toUpperCase());
+  }
+  if (Array.isArray(value)) return value.some(containsLockingTableHint);
+  if (!isRecord(value)) return false;
+  return Object.values(value).some(containsLockingTableHint);
 }
 
 /**

@@ -23,6 +23,10 @@ export function quoteQualifiedIdentifier(
   identifiers: readonly string[],
   dialect: IdentifierDialect,
 ): string {
+  if (dialect === "bigquery") {
+    return quoteIdentifier(identifiers.join("."), dialect);
+  }
+
   return identifiers
     .map((identifier) => quoteIdentifier(identifier, dialect))
     .join(".");
