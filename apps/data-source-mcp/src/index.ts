@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { loadServerConfig } from "./config.js";
 import { ConnectionRegistry } from "./connection-registry.js";
 import { createHttpApp, HttpRequestLifecycle } from "./http-server.js";
+import { drainAndClose } from "./shutdown.js";
 
 const config = loadServerConfig();
 const registry = new ConnectionRegistry(config.connections);
@@ -22,31 +23,13 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`Received ${signal}; shutting down data-source MCP`);
 
-  const serverClosed = new Promise<void>((resolve, reject) => {
-    httpServer.close((error) => (error ? reject(error) : resolve()));
+  await drainAndClose({
+    httpServer,
+    lifecycle,
+    registry,
+    timeoutMs: config.shutdownTimeoutMs,
   });
-  const cleanup = Promise.all([
-    lifecycle.beginShutdown(),
-    registry.close(),
-    serverClosed,
-  ]).then(() => undefined);
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error("Shutdown drain deadline exceeded")),
-      config.shutdownTimeoutMs,
-    );
-  });
-
-  try {
-    await Promise.race([cleanup, deadline]);
-    console.log("Data-source MCP shutdown complete");
-  } catch (error) {
-    httpServer.closeAllConnections();
-    throw error;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  console.log("Data-source MCP shutdown complete");
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

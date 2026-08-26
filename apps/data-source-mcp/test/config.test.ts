@@ -59,7 +59,7 @@ test("loads server-side connection configuration without exposing defaults", () 
   });
 });
 
-test("normalizes explicit browser origins and rejects URL-like impostors", () => {
+test("normalizes allowed HTTP origins and rejects URL-like impostors", () => {
   assert.deepEqual(
     parseAllowedOrigins("https://Example.com:443,http://localhost:3000"),
     ["https://example.com", "http://localhost:3000"],

@@ -18,6 +18,7 @@ interface ClosableSession {
 
 export class HttpRequestLifecycle {
   private readonly sessions = new Set<ClosableSession>();
+  private readonly activeRequests = new Set<Promise<void>>();
   private draining = false;
 
   get isDraining(): boolean {
@@ -32,8 +33,26 @@ export class HttpRequestLifecycle {
     this.sessions.delete(session);
   }
 
+  async track<T>(operation: () => Promise<T>): Promise<T> {
+    const request = operation();
+    const completion = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.activeRequests.add(completion);
+
+    try {
+      return await request;
+    } finally {
+      this.activeRequests.delete(completion);
+    }
+  }
+
   async beginShutdown(): Promise<void> {
     this.draining = true;
+    while (this.activeRequests.size > 0) {
+      await Promise.allSettled([...this.activeRequests]);
+    }
     await Promise.allSettled(
       [...this.sessions].map((session) => session.close()),
     );
@@ -57,37 +76,39 @@ export function createHttpApp(
   app.use("/mcp", rejectWhileDraining(lifecycle));
   app.use("/mcp", requireBearerToken(config.authToken));
   app.post("/mcp", async (request, response) => {
-    const server = createDataSourceMcpServer(registry);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
+    await lifecycle.track(async () => {
+      const server = createDataSourceMcpServer(registry);
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
 
-    let closed = false;
-    const session: ClosableSession = {
-      async close(): Promise<void> {
-        if (closed) return;
-        closed = true;
-        lifecycle.delete(session);
-        await Promise.allSettled([transport.close(), server.close()]);
-      },
-    };
-    lifecycle.add(session);
-    response.on("close", () => void session.close());
+      let closed = false;
+      const session: ClosableSession = {
+        async close(): Promise<void> {
+          if (closed) return;
+          closed = true;
+          lifecycle.delete(session);
+          await Promise.allSettled([transport.close(), server.close()]);
+        },
+      };
+      lifecycle.add(session);
+      response.on("close", () => void session.close());
 
-    try {
-      await server.connect(transport);
-      await transport.handleRequest(request, response, request.body);
-    } catch (error) {
-      if (!response.headersSent) {
-        response.status(500).json({
-          jsonrpc: "2.0",
-          error: { code: -32603, message: "Internal MCP server error" },
-          id: null,
-        });
+      try {
+        await server.connect(transport);
+        await transport.handleRequest(request, response, request.body);
+      } catch (error) {
+        if (!response.headersSent) {
+          response.status(500).json({
+            jsonrpc: "2.0",
+            error: { code: -32603, message: "Internal MCP server error" },
+            id: null,
+          });
+        }
+        console.error("MCP request failed", error);
       }
-      console.error("MCP request failed", error);
-    }
+    });
   });
 
   app.get("/mcp", (_request, response) => {

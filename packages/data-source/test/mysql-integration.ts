@@ -77,6 +77,17 @@ try {
     "SELECT COUNT(*) AS total FROM users",
   );
   assert.equal(reconnected.rows[0]?.total, 5);
+
+  const activeQuery = adapter.query("SELECT SLEEP(0.25) AS waited");
+  let closeSettled = false;
+  const closing = adapter.close().then(() => {
+    closeSettled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(closeSettled, false);
+  const activeResult = await activeQuery;
+  await closing;
+  assert.equal(activeResult.rows[0]?.waited, 0);
 } finally {
   await adapter.close();
 }

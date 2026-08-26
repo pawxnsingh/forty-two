@@ -182,7 +182,9 @@ export class MySQLAdapter extends BaseAdapter {
   }
 
   async close(): Promise<void> {
-    this.invalidateConnection();
+    await this.queryMutex.runExclusive(async () => {
+      this.invalidateConnection();
+    });
   }
 
   getDataSourceType(): string {

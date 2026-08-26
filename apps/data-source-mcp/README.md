@@ -19,10 +19,11 @@ not a browser CORS API; browser preflight is intentionally unsupported.
 Requests without `Origin`, such as normal container-to-container calls, remain
 allowed.
 
-Shutdown stops new HTTP admission, closes active MCP transports and database
-adapters, and drains for `SHUTDOWN_TIMEOUT_MS` (15 seconds by default, 20
-seconds maximum) before the process exits. The Compose grace period is 25
-seconds, leaving at least five seconds for process and container cleanup.
+Shutdown rejects new MCP admission, lets active handlers finish, then closes MCP
+transports, the HTTP listener, and database adapters. The complete sequence is
+bounded by `SHUTDOWN_TIMEOUT_MS` (15 seconds by default, 20 seconds maximum).
+The Compose grace period is 25 seconds, leaving at least five seconds for
+process and container cleanup.
 
 ## Local connection configuration
 
