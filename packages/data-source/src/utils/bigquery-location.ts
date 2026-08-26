@@ -58,7 +58,7 @@ const SUPPORTED_BIGQUERY_LOCATIONS = new Set([
 ]);
 
 export function normalizeBigQueryLocation(location: unknown): string {
-  if (location === undefined || location === null) {
+  if (location === undefined) {
     return DEFAULT_BIGQUERY_LOCATION;
   }
   if (typeof location !== "string") {
