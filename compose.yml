@@ -12,11 +12,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\"",
-        ]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -32,6 +28,34 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  data-source-mcp:
+    image: forty-two-data-source-mcp:local
+    build:
+      context: .
+      dockerfile: apps/data-source-mcp/Dockerfile
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8791
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      DATA_SOURCE_CONNECTIONS_JSON: "${DATA_SOURCE_CONNECTIONS_JSON:-[]}"
+    ports:
+      - "127.0.0.1:${DATA_SOURCE_MCP_PORT:-8791}:8791"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8791/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 20s
     restart: unless-stopped
 
   trueforge:
@@ -54,6 +78,8 @@ services:
     ports:
       - "127.0.0.1:${TRUEFORGE_PORT:-8790}:8790"
     depends_on:
+      data-source-mcp:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
