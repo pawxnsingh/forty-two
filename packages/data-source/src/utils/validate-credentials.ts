@@ -1,4 +1,5 @@
 import { type Credentials, DataSourceType } from "../types/credentials.js";
+import { isValidBigQueryLocation } from "./bigquery-location.js";
 
 /**
  * Type guard to validate if an unknown object is valid Credentials
@@ -55,7 +56,8 @@ function validateBigQueryCredentials(obj: Record<string, unknown>): boolean {
   return !!(
     obj.project_id &&
     typeof obj.project_id === "string" &&
-    (obj.service_account_key || obj.key_file_path)
+    (obj.service_account_key || obj.key_file_path) &&
+    isValidBigQueryLocation(obj.location)
   );
 }
 

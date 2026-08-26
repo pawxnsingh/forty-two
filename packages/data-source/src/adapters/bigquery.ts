@@ -13,6 +13,7 @@ import {
   DataSourceType,
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import { normalizeBigQueryLocation } from "../utils/bigquery-location.js";
 import { resolveQueryTimeout } from "../utils/query-options.js";
 import {
   type AdapterQueryResult,
@@ -37,6 +38,7 @@ export class BigQueryAdapter extends BaseAdapter {
   async initialize(credentials: Credentials): Promise<void> {
     this.validateCredentials(credentials, DataSourceType.BigQuery);
     const bigqueryCredentials = credentials as BigQueryCredentials;
+    const location = normalizeBigQueryLocation(bigqueryCredentials.location);
 
     try {
       const options: BigQueryOptions = {
@@ -65,10 +67,10 @@ export class BigQueryAdapter extends BaseAdapter {
       }
 
       // Set location - default to US if not specified
-      options.location = bigqueryCredentials.location || "US";
+      options.location = location;
 
       this.client = new BigQuery(options);
-      this.credentials = credentials;
+      this.credentials = { ...bigqueryCredentials, location };
       this.connected = true;
     } catch (error) {
       throw new Error(
@@ -247,7 +249,7 @@ export class BigQueryAdapter extends BaseAdapter {
         "bigquery",
         this,
         credentials.project_id,
-        credentials.location ?? "US",
+        normalizeBigQueryLocation(credentials.location),
       );
     }
     return this.introspector;

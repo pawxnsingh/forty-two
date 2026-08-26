@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { DatabaseAdapter } from "../src/adapters/base.js";
+import { BigQueryAdapter } from "../src/adapters/bigquery.js";
 import { convertPositionalPlaceholders } from "../src/adapters/helpers/positional-placeholders.js";
 import { BigQueryIntrospector } from "../src/introspection/bigquery.js";
 import {
@@ -9,6 +10,8 @@ import {
   quoteQualifiedIdentifier,
   quoteStringLiteral,
 } from "../src/introspection/sql-quoting.js";
+import { DataSourceType } from "../src/types/credentials.js";
+import { normalizeBigQueryLocation } from "../src/utils/bigquery-location.js";
 import { resolveQueryTimeout } from "../src/utils/query-options.js";
 import { checkQueryIsReadOnly } from "../src/utils/sql-validation.js";
 
@@ -206,6 +209,39 @@ test("BigQuery models projects as databases and datasets as schemas", async () =
   );
 });
 
+test("BigQuery normalizes blank, multi-region, and regional locations", async () => {
+  for (const [location, expected] of [
+    [undefined, "US"],
+    ["", "US"],
+    ["   ", "US"],
+    ["us", "US"],
+    ["EU", "EU"],
+    ["US-CENTRAL1", "us-central1"],
+  ] as const) {
+    assert.equal(normalizeBigQueryLocation(location), expected);
+  }
+  assert.throws(() => normalizeBigQueryLocation("us central1"));
+
+  const adapter = new BigQueryAdapter();
+  await adapter.initialize({
+    type: DataSourceType.BigQuery,
+    project_id: "project-a",
+    service_account_key: {},
+    location: "   ",
+  });
+  const queries: string[] = [];
+  adapter.query = async (sql: string) => {
+    queries.push(sql);
+    return { rows: [], fields: [], rowCount: 0 };
+  };
+
+  await adapter.introspect().getSchemas();
+  assert.match(
+    queries[0] ?? "",
+    /`project-a\.region-us\.INFORMATION_SCHEMA\.SCHEMATA`/,
+  );
+});
+
 test("BigQuery full introspection honors a non-default project", async () => {
   const { adapter, queries } = createFullIntrospectionBigQueryAdapter();
   const introspector = new BigQueryIntrospector(
@@ -268,6 +304,62 @@ test("BigQuery full introspection preserves same-named datasets across projects"
       ),
     );
   }
+});
+
+test("BigQuery bounds metadata fanout and loads dataset stats in bulk", async () => {
+  const queries: string[] = [];
+  let activeQueries = 0;
+  let maxActiveQueries = 0;
+  const adapter = {
+    query: async (sql: string) => {
+      queries.push(sql);
+      activeQueries += 1;
+      maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      let rows: Record<string, unknown>[] = [];
+      if (sql.includes("INFORMATION_SCHEMA.SCHEMATA")) {
+        rows = Array.from({ length: 12 }, (_, index) => ({
+          dataset_name: `dataset-${index}`,
+          project_name: "project-a",
+          location: "US",
+        }));
+      } else if (sql.includes("INFORMATION_SCHEMA.TABLES")) {
+        const dataset =
+          /project-a\.(dataset-\d+)/.exec(sql)?.[1] ?? "dataset-0";
+        rows = Array.from({ length: 10 }, (_, index) => ({
+          project_name: "project-a",
+          dataset_name: dataset,
+          table_name: `table-${index}`,
+          table_type: "BASE TABLE",
+        }));
+      } else if (sql.includes(".__TABLES__`")) {
+        rows = Array.from({ length: 10 }, (_, index) => ({
+          table_id: `table-${index}`,
+          row_count: index,
+          size_bytes: index * 10,
+        }));
+      }
+
+      activeQueries -= 1;
+      return { rows, fields: [], rowCount: rows.length };
+    },
+  } as unknown as DatabaseAdapter;
+  const introspector = new BigQueryIntrospector(
+    "analytics",
+    adapter,
+    "project-a",
+    "US",
+  );
+
+  const result = await introspector.getFullIntrospection();
+
+  assert.equal(result.tables.length, 120);
+  assert.ok(maxActiveQueries <= 8, `observed ${maxActiveQueries} queries`);
+  assert.equal(
+    queries.filter((query) => query.includes(".__TABLES__`")).length,
+    12,
+  );
 });
 
 function createFullIntrospectionBigQueryAdapter(): {

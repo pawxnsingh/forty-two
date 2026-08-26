@@ -1,5 +1,6 @@
-import type { DatabaseAdapter } from "../adapters/base.js";
+import type { AdapterQueryResult, DatabaseAdapter } from "../adapters/base.js";
 import { DataSourceType } from "../types/credentials.js";
+import type { QueryParameter } from "../types/query.js";
 import type {
   Column,
   ColumnStatistics,
@@ -11,6 +12,7 @@ import type {
   View,
 } from "../types/introspection.js";
 import { BaseIntrospector } from "./base.js";
+import { ConcurrencyLimiter, mapWithConcurrency } from "./concurrency.js";
 import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
@@ -23,7 +25,11 @@ import {
  * Optimized to batch metadata queries for efficiency
  */
 export class BigQueryIntrospector extends BaseIntrospector {
+  private static readonly MAX_CONCURRENT_QUERIES = 8;
   private adapter: DatabaseAdapter;
+  private readonly queryLimiter = new ConcurrencyLimiter(
+    BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+  );
   private cache: {
     databases?: { data: Database[]; lastFetched: Date };
     schemas?: { data: Schema[]; lastFetched: Date };
@@ -96,7 +102,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
 
       query += " ORDER BY schema_name";
 
-      const datasetsResult = await this.adapter.query(query);
+      const datasetsResult = await this.query(query);
 
       const schemas = datasetsResult.rows.map((row) => ({
         name: this.getString(row.dataset_name) || "",
@@ -123,8 +129,10 @@ export class BigQueryIntrospector extends BaseIntrospector {
   async getTables(database?: string, schema?: string): Promise<Table[]> {
     if (!schema) {
       const schemas = await this.getSchemas(database);
-      const tables = await Promise.all(
-        schemas.map((item) => this.getTables(item.database, item.name)),
+      const tables = await mapWithConcurrency(
+        schemas,
+        BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+        (item) => this.getTables(item.database, item.name),
       );
       return tables.flat();
     }
@@ -140,7 +148,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
         whereClause += ` AND table_schema = ${quoteStringLiteral(schema)}`;
       }
 
-      const tablesResult = await this.adapter.query(`
+      const tablesResult = await this.query(`
         SELECT table_catalog as project_name,
                table_schema as dataset_name,
                table_name,
@@ -168,37 +176,33 @@ export class BigQueryIntrospector extends BaseIntrospector {
           },
         }));
 
-      // Enhance tables with basic statistics
-      const tablesWithStats = await Promise.all(
-        tables.map(async (table) => {
-          try {
-            const tableStatsResult = await this.adapter.query(
-              `
-              SELECT row_count,
-                     size_bytes
-              FROM ${quoteQualifiedIdentifier([table.database, table.schema, "__TABLES__"], "bigquery")}
-              WHERE table_id = ?
-            `,
-              [table.name],
-            );
+      if (tables.length === 0) return tables;
 
-            const stats = tableStatsResult.rows[0];
-            return {
-              ...table,
-              rowCount: this.parseNumber(stats?.row_count) ?? 0,
-              sizeBytes: this.parseNumber(stats?.size_bytes) ?? 0,
-            };
-          } catch (error) {
-            console.warn(
-              `Failed to get stats for table ${table.schema}.${table.name}:`,
-              error,
-            );
-            return table;
-          }
-        }),
-      );
-
-      return tablesWithStats;
+      try {
+        const statsResult = await this.query(`
+          SELECT table_id,
+                 row_count,
+                 size_bytes
+          FROM ${quoteQualifiedIdentifier([database ?? this.defaultProject, schema, "__TABLES__"], "bigquery")}
+        `);
+        const statsByTable = new Map(
+          statsResult.rows.map((row) => [this.getString(row.table_id), row]),
+        );
+        return tables.map((table) => {
+          const stats = statsByTable.get(table.name);
+          return {
+            ...table,
+            rowCount: this.parseNumber(stats?.row_count) ?? 0,
+            sizeBytes: this.parseNumber(stats?.size_bytes) ?? 0,
+          };
+        });
+      } catch (error) {
+        console.warn(
+          `Failed to get stats for dataset ${database ?? this.defaultProject}.${schema}:`,
+          error,
+        );
+        return tables;
+      }
     } catch (error) {
       console.warn("Failed to fetch BigQuery tables:", error);
       return [];
@@ -212,8 +216,10 @@ export class BigQueryIntrospector extends BaseIntrospector {
   ): Promise<Column[]> {
     if (!schema) {
       const schemas = await this.getSchemas(database);
-      const columns = await Promise.all(
-        schemas.map((item) => this.getColumns(item.database, item.name, table)),
+      const columns = await mapWithConcurrency(
+        schemas,
+        BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+        (item) => this.getColumns(item.database, item.name, table),
       );
       return columns.flat();
     }
@@ -235,7 +241,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
         whereClause = `WHERE ${predicates.join(" AND ")}`;
       }
 
-      const columnsResult = await this.adapter.query(`
+      const columnsResult = await this.query(`
         SELECT table_catalog as project_name,
                table_schema as dataset_name,
                table_name,
@@ -286,8 +292,10 @@ export class BigQueryIntrospector extends BaseIntrospector {
   async getViews(database?: string, schema?: string): Promise<View[]> {
     if (!schema) {
       const schemas = await this.getSchemas(database);
-      const views = await Promise.all(
-        schemas.map((item) => this.getViews(item.database, item.name)),
+      const views = await mapWithConcurrency(
+        schemas,
+        BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+        (item) => this.getViews(item.database, item.name),
       );
       return views.flat();
     }
@@ -306,7 +314,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
         whereClause = `WHERE ${predicates.join(" AND ")}`;
       }
 
-      const viewsResult = await this.adapter.query(`
+      const viewsResult = await this.query(`
         SELECT table_catalog as project_name,
                table_schema as dataset_name,
                table_name as view_name,
@@ -334,7 +342,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
     table: string,
   ): Promise<TableStatistics> {
     // Get basic table statistics only (no column statistics)
-    const tableStatsResult = await this.adapter.query(`
+    const tableStatsResult = await this.query(`
       SELECT row_count,
              size_bytes,
              last_modified_time
@@ -390,7 +398,7 @@ export class BigQueryIntrospector extends BaseIntrospector {
         columns,
       );
       const columnLabels = columns.map((column) => column.name);
-      const statsResult = await this.adapter.query(statsQuery, [
+      const statsResult = await this.query(statsQuery, [
         ...columnLabels,
         ...columnLabels,
       ]);
@@ -574,6 +582,13 @@ ORDER BY s.column_name`;
     };
   }
 
+  private query(
+    sql: string,
+    params?: QueryParameter[],
+  ): Promise<AdapterQueryResult> {
+    return this.queryLimiter.run(() => this.adapter.query(sql, params));
+  }
+
   /**
    * Map BigQuery table types to our standard types
    */
@@ -657,8 +672,10 @@ ORDER BY s.column_name`;
         )
       : await this.getDatabases();
 
-    const schemaGroups = await Promise.all(
-      databases.map((database) => this.getSchemas(database.name)),
+    const schemaGroups = await mapWithConcurrency(
+      databases,
+      BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+      (database) => this.getSchemas(database.name),
     );
     let schemas = schemaGroups.flat();
     if (options?.schemas) {
@@ -667,8 +684,10 @@ ORDER BY s.column_name`;
       );
     }
 
-    const tableGroups = await Promise.all(
-      schemas.map((schema) => this.getTables(schema.database, schema.name)),
+    const tableGroups = await mapWithConcurrency(
+      schemas,
+      BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+      (schema) => this.getTables(schema.database, schema.name),
     );
     let tables = tableGroups.flat();
     if (options?.tables) {
@@ -677,8 +696,10 @@ ORDER BY s.column_name`;
       );
     }
 
-    const columnGroups = await Promise.all(
-      schemas.map((schema) => this.getColumns(schema.database, schema.name)),
+    const columnGroups = await mapWithConcurrency(
+      schemas,
+      BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+      (schema) => this.getColumns(schema.database, schema.name),
     );
     const columns = columnGroups
       .flat()
@@ -691,8 +712,10 @@ ORDER BY s.column_name`;
         ),
       );
 
-    const viewGroups = await Promise.all(
-      schemas.map((schema) => this.getViews(schema.database, schema.name)),
+    const viewGroups = await mapWithConcurrency(
+      schemas,
+      BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+      (schema) => this.getViews(schema.database, schema.name),
     );
     const views = viewGroups.flat();
 
@@ -734,55 +757,51 @@ ORDER BY s.column_name`;
     tables: Table[],
     columns: Column[],
   ): Promise<Column[]> {
-    // Create a map for quick column lookup
     const columnMap = new Map<string, Column>();
+    const columnsByTable = new Map<string, Column[]>();
     for (const column of columns) {
       const key = `${column.database}.${column.schema}.${column.table}.${column.name}`;
       columnMap.set(key, { ...column });
+      const tableKey = `${column.database}.${column.schema}.${column.table}`;
+      const tableColumns = columnsByTable.get(tableKey) ?? [];
+      tableColumns.push(column);
+      columnsByTable.set(tableKey, tableColumns);
     }
 
-    // Process tables in batches of 20
-    const batchSize = 20;
-    const tableBatches: Table[][] = [];
-    for (let i = 0; i < tables.length; i += batchSize) {
-      tableBatches.push(tables.slice(i, i + batchSize));
-    }
+    await mapWithConcurrency(
+      tables,
+      BigQueryIntrospector.MAX_CONCURRENT_QUERIES,
+      async (table) => {
+        try {
+          const tableKey = `${table.database}.${table.schema}.${table.name}`;
+          const tableColumns = columnsByTable.get(tableKey) ?? [];
+          if (tableColumns.length === 0) return;
 
-    // Process each batch in parallel
-    await Promise.all(
-      tableBatches.map(async (batch) => {
-        // Process all tables in this batch in parallel
-        await Promise.all(
-          batch.map(async (table) => {
-            try {
-              const columnStats = await this.getColumnStatistics(
-                table.database,
-                table.schema,
-                table.name,
-              );
+          const columnStats = await this.getColumnStatisticsForColumns(
+            table.database,
+            table.schema,
+            table.name,
+            tableColumns,
+          );
 
-              // Attach statistics to corresponding columns
-              for (const stat of columnStats) {
-                const key = `${table.database}.${table.schema}.${table.name}.${stat.columnName}`;
-                const column = columnMap.get(key);
-                if (column) {
-                  column.distinctCount = stat.distinctCount ?? 0;
-                  column.nullCount = stat.nullCount ?? 0;
-                  column.minValue = stat.minValue ?? "";
-                  column.maxValue = stat.maxValue ?? "";
-                  column.sampleValues = stat.sampleValues ?? "";
-                }
-              }
-            } catch (error) {
-              // Log warning but don't fail the entire introspection
-              console.warn(
-                `Failed to get column statistics for table ${table.database}.${table.schema}.${table.name}:`,
-                error,
-              );
+          for (const stat of columnStats) {
+            const key = `${table.database}.${table.schema}.${table.name}.${stat.columnName}`;
+            const column = columnMap.get(key);
+            if (column) {
+              column.distinctCount = stat.distinctCount ?? 0;
+              column.nullCount = stat.nullCount ?? 0;
+              column.minValue = stat.minValue ?? "";
+              column.maxValue = stat.maxValue ?? "";
+              column.sampleValues = stat.sampleValues ?? "";
             }
-          }),
-        );
-      }),
+          }
+        } catch (error) {
+          console.warn(
+            `Failed to get column statistics for table ${table.database}.${table.schema}.${table.name}:`,
+            error,
+          );
+        }
+      },
     );
 
     return Array.from(columnMap.values());
