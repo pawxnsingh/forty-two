@@ -93,18 +93,35 @@ test("serves authenticated MCP tools and rejects anonymous requests", async (con
   assert.deepEqual(result.structuredContent, { dataSources: [] });
 });
 
-test("shutdown lifecycle rejects admission and closes active sessions", async () => {
+test("shutdown lifecycle awaits response-triggered session cleanup", async () => {
   const lifecycle = new HttpRequestLifecycle();
-  let closed = false;
-  lifecycle.add({
-    async close() {
-      closed = true;
-    },
+  let releaseClose: () => void = () => undefined;
+  const closeReleased = new Promise<void>((resolve) => {
+    releaseClose = resolve;
   });
+  let closeCalls = 0;
+  const session = {
+    async close() {
+      closeCalls += 1;
+      await closeReleased;
+    },
+  };
+  lifecycle.add(session);
 
-  await lifecycle.beginShutdown();
+  const responseCleanup = lifecycle.close(session);
+  let shutdownSettled = false;
+  const shutdown = lifecycle.beginShutdown().then(() => {
+    shutdownSettled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(shutdownSettled, false);
+  assert.equal(closeCalls, 1);
 
-  assert.equal(closed, true);
+  releaseClose();
+  await Promise.all([responseCleanup, shutdown]);
+
+  assert.equal(shutdownSettled, true);
+  assert.equal(closeCalls, 1);
   assert.equal(lifecycle.isDraining, true);
 });
 

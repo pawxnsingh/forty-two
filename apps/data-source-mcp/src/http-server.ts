@@ -18,6 +18,7 @@ interface ClosableSession {
 
 export class HttpRequestLifecycle {
   private readonly sessions = new Set<ClosableSession>();
+  private readonly closingSessions = new Map<ClosableSession, Promise<void>>();
   private readonly activeRequests = new Set<Promise<void>>();
   private draining = false;
 
@@ -29,8 +30,22 @@ export class HttpRequestLifecycle {
     this.sessions.add(session);
   }
 
-  delete(session: ClosableSession): void {
-    this.sessions.delete(session);
+  close(session: ClosableSession): Promise<void> {
+    const existing = this.closingSessions.get(session);
+    if (existing) return existing;
+
+    const closing = Promise.resolve()
+      .then(() => session.close())
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        this.sessions.delete(session);
+        this.closingSessions.delete(session);
+      });
+    this.closingSessions.set(session, closing);
+    return closing;
   }
 
   async track<T>(operation: () => Promise<T>): Promise<T> {
@@ -53,9 +68,11 @@ export class HttpRequestLifecycle {
     while (this.activeRequests.size > 0) {
       await Promise.allSettled([...this.activeRequests]);
     }
-    await Promise.allSettled(
-      [...this.sessions].map((session) => session.close()),
-    );
+    while (this.sessions.size > 0) {
+      await Promise.allSettled(
+        [...this.sessions].map((session) => this.close(session)),
+      );
+    }
   }
 }
 
@@ -83,17 +100,13 @@ export function createHttpApp(
         enableJsonResponse: true,
       });
 
-      let closed = false;
       const session: ClosableSession = {
         async close(): Promise<void> {
-          if (closed) return;
-          closed = true;
-          lifecycle.delete(session);
           await Promise.allSettled([transport.close(), server.close()]);
         },
       };
       lifecycle.add(session);
-      response.on("close", () => void session.close());
+      response.on("close", () => void lifecycle.close(session));
 
       try {
         await server.connect(transport);

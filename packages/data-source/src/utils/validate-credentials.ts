@@ -48,7 +48,8 @@ function validateBigQueryCredentials(obj: Record<string, unknown>): boolean {
 
 function validatePostgreSQLCredentials(obj: Record<string, unknown>): boolean {
   return (
-    validateUserPasswordCredentials(obj, "host", false) &&
+    hasRequiredStrings(obj, ["host", "username", "password"]) &&
+    isValidPort(obj.port) &&
     (isNonEmptyString(obj.default_database) ||
       isNonEmptyString(obj.database)) &&
     hasOptionalStrings(obj, ["default_database", "database", "schema"]) &&
@@ -89,14 +90,13 @@ function validateRedshiftCredentials(obj: Record<string, unknown>): boolean {
 function validateUserPasswordCredentials(
   obj: Record<string, unknown>,
   hostField: "host" | "server",
-  requireDefaultDatabase = true,
 ): boolean {
   return (
     hasRequiredStrings(obj, [
       hostField,
+      "default_database",
       "username",
       "password",
-      ...(requireDefaultDatabase ? ["default_database"] : []),
     ]) && isValidPort(obj.port)
   );
 }
