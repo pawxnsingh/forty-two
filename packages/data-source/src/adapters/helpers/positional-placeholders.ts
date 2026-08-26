@@ -27,6 +27,14 @@ export function convertPositionalPlaceholders(
       continue;
     }
 
+    // GoogleSQL accepts shell-style single-line comments.
+    if (character === "#") {
+      const end = findLineEnd(sql, index + 1);
+      converted += sql.slice(index, end);
+      index = end;
+      continue;
+    }
+
     if (character === "/" && next === "*") {
       const end = findBlockCommentEnd(sql, index);
       converted += sql.slice(index, end);

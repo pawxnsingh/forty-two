@@ -143,13 +143,11 @@ export class BigQueryIntrospector extends BaseIntrospector {
       let whereClause =
         "WHERE table_type IN ('BASE TABLE', 'VIEW', 'EXTERNAL')";
 
-      if (database && schema) {
-        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)} AND table_schema = ${quoteStringLiteral(schema)}`;
-      } else if (database || schema) {
-        const targetDataset = database ?? schema;
-        if (targetDataset !== undefined) {
-          whereClause += ` AND table_schema = ${quoteStringLiteral(targetDataset)}`;
-        }
+      if (database) {
+        whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
+      }
+      if (schema) {
+        whereClause += ` AND table_schema = ${quoteStringLiteral(schema)}`;
       }
 
       const tablesResult = await this.adapter.query(`
@@ -225,18 +223,18 @@ export class BigQueryIntrospector extends BaseIntrospector {
     try {
       let whereClause = "";
 
-      if (database && schema && table) {
-        whereClause = `WHERE table_catalog = ${quoteStringLiteral(database)} AND table_schema = ${quoteStringLiteral(schema)} AND table_name = ${quoteStringLiteral(table)}`;
-      } else if (database || schema) {
-        const targetDataset = database ?? schema;
-        if (targetDataset !== undefined) {
-          whereClause = `WHERE table_schema = ${quoteStringLiteral(targetDataset)}`;
-          if (table) {
-            whereClause += ` AND table_name = ${quoteStringLiteral(table)}`;
-          }
-        }
-      } else if (table) {
-        whereClause = `WHERE table_name = ${quoteStringLiteral(table)}`;
+      const predicates: string[] = [];
+      if (database) {
+        predicates.push(`table_catalog = ${quoteStringLiteral(database)}`);
+      }
+      if (schema) {
+        predicates.push(`table_schema = ${quoteStringLiteral(schema)}`);
+      }
+      if (table) {
+        predicates.push(`table_name = ${quoteStringLiteral(table)}`);
+      }
+      if (predicates.length > 0) {
+        whereClause = `WHERE ${predicates.join(" AND ")}`;
       }
 
       const columnsResult = await this.adapter.query(`
@@ -291,13 +289,15 @@ export class BigQueryIntrospector extends BaseIntrospector {
     try {
       let whereClause = "";
 
-      if (database && schema) {
-        whereClause = `WHERE table_catalog = ${quoteStringLiteral(database)} AND table_schema = ${quoteStringLiteral(schema)}`;
-      } else if (database || schema) {
-        const targetDataset = database ?? schema;
-        if (targetDataset !== undefined) {
-          whereClause = `WHERE table_schema = ${quoteStringLiteral(targetDataset)}`;
-        }
+      const predicates: string[] = [];
+      if (database) {
+        predicates.push(`table_catalog = ${quoteStringLiteral(database)}`);
+      }
+      if (schema) {
+        predicates.push(`table_schema = ${quoteStringLiteral(schema)}`);
+      }
+      if (predicates.length > 0) {
+        whereClause = `WHERE ${predicates.join(" AND ")}`;
       }
 
       const viewsResult = await this.adapter.query(`
@@ -327,14 +327,12 @@ export class BigQueryIntrospector extends BaseIntrospector {
     schema: string,
     table: string,
   ): Promise<TableStatistics> {
-    const targetDataset = database || schema;
-
     // Get basic table statistics only (no column statistics)
     const tableStatsResult = await this.adapter.query(`
       SELECT row_count,
              size_bytes,
              last_modified_time
-      FROM ${quoteQualifiedIdentifier([targetDataset, "__TABLES__"], "bigquery")}
+      FROM ${quoteQualifiedIdentifier([database, schema, "__TABLES__"], "bigquery")}
       WHERE table_id = ${quoteStringLiteral(table)}
     `);
 
@@ -342,8 +340,8 @@ export class BigQueryIntrospector extends BaseIntrospector {
 
     return {
       table,
-      schema: targetDataset,
-      database: targetDataset,
+      schema,
+      database,
       rowCount: this.parseNumber(basicStats?.row_count) ?? 0,
       sizeBytes: this.parseNumber(basicStats?.size_bytes) ?? 0,
       columnStatistics: [], // No column statistics in basic table stats
@@ -359,17 +357,17 @@ export class BigQueryIntrospector extends BaseIntrospector {
     schema: string,
     table: string,
   ): Promise<ColumnStatistics[]> {
-    const targetDataset = database || schema;
     // Get columns for this table
-    const columns = await this.getColumns(targetDataset, undefined, table);
-    return this.getColumnStatisticsForColumns(targetDataset, table, columns);
+    const columns = await this.getColumns(database, schema, table);
+    return this.getColumnStatisticsForColumns(database, schema, table, columns);
   }
 
   /**
    * Get column statistics using optimized CTE approach with single table scan
    */
   private async getColumnStatisticsForColumns(
-    dataset: string,
+    database: string,
+    schema: string,
     table: string,
     columns: Column[],
   ): Promise<ColumnStatistics[]> {
@@ -380,7 +378,8 @@ export class BigQueryIntrospector extends BaseIntrospector {
     try {
       // Build the optimized CTE-based query
       const statsQuery = this.buildOptimizedColumnStatsQuery(
-        dataset,
+        database,
+        schema,
         table,
         columns,
       );
@@ -426,12 +425,13 @@ export class BigQueryIntrospector extends BaseIntrospector {
    * Build optimized CTE-based query that scans the table only once
    */
   private buildOptimizedColumnStatsQuery(
-    dataset: string,
+    database: string,
+    schema: string,
     table: string,
     columns: Column[],
   ): string {
     const fullyQualifiedTable = quoteQualifiedIdentifier(
-      [dataset, table],
+      [database, schema, table],
       "bigquery",
     );
 

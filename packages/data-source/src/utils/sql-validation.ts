@@ -50,13 +50,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasMeaningfulIntoClause(statement: Record<string, unknown>): boolean {
   const into = statement.into;
-  if (!isRecord(into)) return false;
+  if (into === null || into === undefined) return false;
+  if (Array.isArray(into)) return into.length > 0;
 
-  return (
-    into.type === "into" ||
-    (into.position !== null && into.position !== undefined) ||
-    (into.keyword !== null && into.keyword !== undefined) ||
-    (into.expr !== null && into.expr !== undefined)
+  // Fail closed for parser/dialect AST shapes we do not recognize. A populated
+  // SELECT `into` node always represents a side effect, regardless of whether
+  // the parser models it as an object, string, or another scalar.
+  if (!isRecord(into)) return true;
+
+  return Object.values(into).some(
+    (value) => value !== null && value !== undefined,
   );
 }
 
