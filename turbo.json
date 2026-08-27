@@ -1,6 +1,7 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
+  "globalEnv": ["DAYTONA_API_URL", "FORTY_TWO_AGENT_NAME"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

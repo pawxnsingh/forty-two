@@ -10,6 +10,7 @@
     "test:agent-spec": "node scripts/test-agent-spec.mjs",
     "test:integration-events": "node --test scripts/test-integration-events.mjs",
     "test:file-integration": "node --env-file-if-exists=.env scripts/test-file-integration.mjs",
+    "test:chat-backend-e2e": "node --env-file-if-exists=.env scripts/test-chat-backend-e2e.mjs",
     "test:platform-integration": "node --env-file-if-exists=.env scripts/test-platform-integration.mjs"
   },
   "devDependencies": {

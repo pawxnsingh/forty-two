@@ -56,6 +56,26 @@ execution telemetry. It then cancels any running turn and independently cleans
 up its TrueForge session and Daytona sandbox. Cleanup walks every event page and
 retains the TrueForge session when sandbox disposition cannot be established.
 
+The Next.js backend is a server-side gateway built with the published
+`@truefoundry/trueforge-sdk`. The frontend can create a session, submit JSON
+chat or multipart CSV/XLSX turns, wait for completion, and read events through
+`/api/chat/sessions`. TrueForge remains the source of truth; the gateway does
+not duplicate sessions, messages, turns, or uploaded files in another store.
+
+Run the complete frontend-facing backend test with the stack healthy:
+
+```sh
+pnpm test:chat-backend-e2e
+```
+
+This live test calls the Next.js product API and proves four independent paths:
+real CSV analysis, a generated valid XLSX workbook, a read-only PostgreSQL
+query through the datasource MCP, and a CSV/PostgreSQL join inside Daytona. It
+checks TrueForge events, correlated Daytona exec responses, and authenticated
+MCP execution telemetry; it does not mock the services or inspect source text
+as a substitute for execution. Every test session, sandbox, and temporary
+database table is removed afterward.
+
 - Next.js: http://localhost:3000
 - TrueForge UI and API: http://localhost:8790
 - TrueForge health: http://localhost:8790/healthz
