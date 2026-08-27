@@ -214,7 +214,6 @@ export class RedshiftIntrospector extends BaseIntrospector {
                table_type as type
         FROM information_schema.tables
         ${whereClause}
-        AND table_type != 'VIEW'
         ORDER BY schema, name
       `,
         undefined,

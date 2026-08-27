@@ -11,6 +11,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { ServerConfig } from "./config.js";
 import type { ConnectionRegistry } from "./connection-registry.js";
 import { createDataSourceMcpServer } from "./mcp-server.js";
+import { QueryExecutionLedger } from "./query-execution-ledger.js";
 
 interface ClosableSession {
   close(): Promise<void>;
@@ -82,6 +83,7 @@ export function createHttpApp(
   lifecycle = new HttpRequestLifecycle(),
 ): Express {
   const app = express();
+  const queryLedger = new QueryExecutionLedger();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
 
@@ -89,12 +91,27 @@ export function createHttpApp(
     response.json({ status: "ok", service: "forty-two-data-source-mcp" });
   });
 
+  app.get(
+    "/internal/query-executions/:requestId",
+    requireBearerToken(config.authToken),
+    (request, response) => {
+      const requestId = request.params.requestId;
+      const record =
+        typeof requestId === "string" ? queryLedger.get(requestId) : undefined;
+      if (!record) {
+        response.status(404).json({ error: "Query execution not found" });
+        return;
+      }
+      response.json({ data: record });
+    },
+  );
+
   app.use("/mcp", requireAllowedOrigin(config.allowedOrigins));
   app.use("/mcp", rejectWhileDraining(lifecycle));
   app.use("/mcp", requireBearerToken(config.authToken));
   app.post("/mcp", async (request, response) => {
     await lifecycle.track(async () => {
-      const server = createDataSourceMcpServer(registry);
+      const server = createDataSourceMcpServer(registry, queryLedger);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

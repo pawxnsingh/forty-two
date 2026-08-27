@@ -50,6 +50,93 @@ test("accepts ordinary read-only queries", () => {
   );
 });
 
+test("rejects unrecognized, qualified, and security-sensitive SELECT functions", () => {
+  for (const sql of [
+    "SELECT attacker_controlled_function()",
+    "SELECT pg_catalog.pg_read_file('/etc/passwd')",
+    "SELECT dblink_exec('remote', 'DELETE FROM accounts')",
+    "SELECT pg_advisory_lock(42)",
+    "SELECT set_config('application_name', 'changed', false)",
+  ]) {
+    assert.equal(checkQueryIsReadOnly(sql, "postgres").isReadOnly, false);
+  }
+  assert.equal(
+    checkQueryIsReadOnly(
+      "SELECT current_database(), md5(random()::text), date_trunc('day', now())",
+      "postgres",
+    ).isReadOnly,
+    true,
+  );
+});
+
+test("rejects SELECT assignments to MySQL session variables", () => {
+  assert.equal(
+    checkQueryIsReadOnly("SELECT @agent_mode := 'write'", "mysql").isReadOnly,
+    false,
+  );
+});
+
+test("runs PostgreSQL MCP reads inside a database-enforced read-only transaction", async () => {
+  const adapter = new PostgreSQLAdapter();
+  const calls: string[] = [];
+  Object.assign(adapter, {
+    connected: true,
+    client: {
+      async query(sql: string) {
+        calls.push(sql);
+        return { rows: [{ value: 1 }], fields: [], rowCount: 1 };
+      },
+    },
+  });
+
+  const result = await adapter.queryReadOnly(
+    "SELECT 1",
+    undefined,
+    undefined,
+    1_000,
+  );
+  assert.deepEqual(result.rows, [{ value: 1 }]);
+  assert.deepEqual(calls, [
+    "BEGIN READ ONLY",
+    "SET statement_timeout = 1000",
+    "SELECT 1",
+    "ROLLBACK",
+  ]);
+});
+
+test("runs MySQL MCP reads inside a database-enforced read-only transaction", async () => {
+  const adapter = new MySQLAdapter();
+  const calls: string[] = [];
+  Object.assign(adapter, {
+    connected: true,
+    connection: {
+      execute(
+        sql: string,
+        _params: unknown,
+        callback: (error: null, rows: unknown[], fields: unknown[]) => void,
+      ) {
+        calls.push(sql);
+        callback(null, sql === "SELECT 1" ? [{ value: 1 }] : [], []);
+      },
+    },
+  });
+
+  const result = await adapter.queryReadOnly("SELECT 1");
+  assert.deepEqual(result.rows, [{ value: 1 }]);
+  assert.deepEqual(calls, [
+    "START TRANSACTION READ ONLY",
+    "SELECT 1",
+    "ROLLBACK",
+  ]);
+});
+
+test("connectors without a database read-only execution mode fail closed", async () => {
+  await assert.rejects(
+    new BigQueryAdapter().queryReadOnly("SELECT 1"),
+    /does not provide database-enforced read-only query execution/,
+  );
+});
+
 test("rejects SQL Server locking table hints", () => {
   for (const hint of ["UPDLOCK", "XLOCK", "HOLDLOCK", "TABLOCKX"]) {
     assert.equal(
@@ -113,6 +200,35 @@ test("rejects invalid direct introspection bounds before cold or warm cache acce
   }
   await assert.rejects(introspector.getDatabases({ timeout: 0 }), /timeout/i);
   assert.equal(queryCount, 0);
+});
+
+test("PostgreSQL table discovery includes views", async () => {
+  let discoverySql = "";
+  const adapter = {
+    async query(sql: string) {
+      discoverySql = sql;
+      return {
+        rows: [
+          {
+            database: "analytics",
+            schema: "public",
+            name: "monthly_sales",
+            type: "VIEW",
+          },
+        ],
+        fields: [],
+        rowCount: 1,
+      };
+    },
+  } as unknown as DatabaseAdapter;
+
+  const relations = await new PostgreSQLIntrospector(
+    "postgres",
+    adapter,
+  ).getTables("analytics", "public", { limit: 10 });
+  assert.doesNotMatch(discoverySql, /table_type\s*!=\s*'VIEW'/i);
+  assert.equal(relations[0]?.name, "monthly_sales");
+  assert.equal(relations[0]?.type, "VIEW");
 });
 
 test("serializes session-level PostgreSQL and Redshift timeouts with queries", async () => {

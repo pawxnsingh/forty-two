@@ -85,6 +85,32 @@ test("serves authenticated MCP tools and rejects anonymous requests", async (con
     listed.tools.every((tool) => tool.annotations?.readOnlyHint),
     true,
   );
+  assert.equal(
+    listed.tools.every(
+      (tool) =>
+        tool.annotations?.destructiveHint === false &&
+        tool.annotations?.idempotentHint === true &&
+        typeof tool.description === "string" &&
+        tool.description.length >= 150,
+    ),
+    true,
+  );
+  const descriptions = Object.fromEntries(
+    listed.tools.map((tool) => [tool.name, tool.description]),
+  );
+  assert.match(
+    descriptions.list_data_sources ?? "",
+    /Credentials are never returned/,
+  );
+  assert.match(
+    descriptions.describe_table ?? "",
+    /exact returned identifiers and types/,
+  );
+  assert.match(
+    descriptions.run_read_query ?? "",
+    /bounded, read-only SQL query/,
+  );
+  assert.match(descriptions.run_read_query ?? "", /Never infer missing rows/);
 
   const result = await client.callTool({
     name: "list_data_sources",
@@ -285,6 +311,77 @@ test("discovery limits are enforced before connector metadata retrieval", async 
     databases: [{ name: "one" }, { name: "two" }],
     truncated: true,
   });
+});
+
+test("records authenticated server-side evidence for traced queries", async (context) => {
+  const connection = {
+    name: "analytics",
+    type: DataSourceType.PostgreSQL,
+    credentials: {
+      type: DataSourceType.PostgreSQL,
+      host: "database.internal",
+      default_database: "analytics",
+      username: "reader",
+      password: "secret",
+    },
+    policy: { maxRows: 25, queryTimeoutMs: 1_500 },
+  };
+  const registry = new ConnectionRegistry([connection]);
+  registry.dataSource.execute = async () => ({
+    success: true,
+    rows: [{ database_name: "analytics", nonce: "server-result" }],
+    columns: [],
+    executionTime: 1,
+    dataSource: "analytics",
+  });
+  const config: ServerConfig = {
+    host: "127.0.0.1",
+    port: 0,
+    authToken,
+    allowedOrigins: [],
+    shutdownTimeoutMs: 15_000,
+    connections: [connection],
+  };
+  const server = createServer(createHttpApp(config, registry));
+  const baseUrl = await listen(server);
+  const client = new Client({ name: "telemetry-test", version: "0.1.0" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`${baseUrl}/mcp`),
+    { requestInit: { headers: { authorization: `Bearer ${authToken}` } } },
+  );
+  context.after(async () => {
+    await client.close();
+    await close(server);
+    await registry.close();
+  });
+
+  await client.connect(transport);
+  const requestId = "8a649768-e5f7-4de8-92e3-fc5194fdad6a";
+  await client.callTool({
+    name: "run_read_query",
+    arguments: { dataSource: "analytics", sql: "SELECT 1", requestId },
+  });
+
+  const unauthorized = await fetch(
+    `${baseUrl}/internal/query-executions/${requestId}`,
+  );
+  assert.equal(unauthorized.status, 401);
+  const response = await fetch(
+    `${baseUrl}/internal/query-executions/${requestId}`,
+    { headers: { authorization: `Bearer ${authToken}` } },
+  );
+  assert.equal(response.status, 200);
+  const record = (await response.json()).data;
+  assert.deepEqual(
+    { ...record, recordedAt: undefined },
+    {
+      requestId,
+      dataSource: "analytics",
+      rows: [{ database_name: "analytics", nonce: "server-result" }],
+      recordedAt: undefined,
+    },
+  );
+  assert.equal(Number.isNaN(Date.parse(record.recordedAt)), false);
 });
 
 async function listen(server: Server): Promise<string> {

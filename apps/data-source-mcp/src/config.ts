@@ -60,8 +60,45 @@ export function loadServerConfig(
       20_000,
       "SHUTDOWN_TIMEOUT_MS",
     ),
-    connections: parseConnections(environment.DATA_SOURCE_CONNECTIONS_JSON),
+    connections: resolveConnections(environment),
   };
+}
+
+function resolveConnections(
+  environment: NodeJS.ProcessEnv,
+): ConfiguredConnection[] {
+  if (environment.DATA_SOURCE_CONNECTIONS_JSON?.trim()) {
+    return parseConnections(environment.DATA_SOURCE_CONNECTIONS_JSON);
+  }
+
+  const password = environment.PLATFORM_POSTGRES_PASSWORD?.trim();
+  if (!password) return [];
+  const database =
+    environment.PLATFORM_POSTGRES_DATABASE?.trim() || "forty_two";
+  const username =
+    environment.PLATFORM_POSTGRES_USER?.trim() || "forty_two_reader";
+  const port = parsePositiveInteger(
+    environment.PLATFORM_POSTGRES_PORT,
+    5432,
+    "PLATFORM_POSTGRES_PORT",
+  );
+  return [
+    {
+      name: "local-postgres",
+      description: "Forty Two platform database",
+      type: DataSourceType.PostgreSQL,
+      credentials: {
+        type: DataSourceType.PostgreSQL,
+        host: environment.PLATFORM_POSTGRES_HOST?.trim() || "postgres",
+        port,
+        default_database: database,
+        username,
+        password,
+        ssl: false,
+      },
+      policy: { maxRows: 1_000, queryTimeoutMs: 60_000 },
+    },
+  ];
 }
 
 export function parseAllowedOrigins(value: string | undefined): string[] {

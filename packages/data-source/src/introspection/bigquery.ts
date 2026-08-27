@@ -169,7 +169,8 @@ export class BigQueryIntrospector extends BaseIntrospector {
     }
 
     try {
-      let whereClause = "WHERE table_type IN ('BASE TABLE', 'EXTERNAL')";
+      let whereClause =
+        "WHERE table_type IN ('BASE TABLE', 'EXTERNAL', 'VIEW', 'MATERIALIZED VIEW')";
 
       if (database) {
         whereClause += ` AND table_catalog = ${quoteStringLiteral(database)}`;
@@ -194,21 +195,16 @@ export class BigQueryIntrospector extends BaseIntrospector {
         options,
       );
 
-      const tables = tablesResult.rows
-        .filter(
-          (row) =>
-            !this.getString(row.table_type)?.toUpperCase().includes("VIEW"),
-        )
-        .map((row) => ({
-          name: this.getString(row.table_name) || "",
-          schema: this.getString(row.dataset_name) || "",
-          database: this.getString(row.project_name) || "",
-          type: this.mapTableType(this.getString(row.table_type)),
-          created: this.parseDate(row.creation_time) || new Date(),
-          metadata: {
-            ddl: this.getString(row.ddl),
-          },
-        }));
+      const tables = tablesResult.rows.map((row) => ({
+        name: this.getString(row.table_name) || "",
+        schema: this.getString(row.dataset_name) || "",
+        database: this.getString(row.project_name) || "",
+        type: this.mapTableType(this.getString(row.table_type)),
+        created: this.parseDate(row.creation_time) || new Date(),
+        metadata: {
+          ddl: this.getString(row.ddl),
+        },
+      }));
 
       if (tables.length === 0) return tables;
 

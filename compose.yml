@@ -30,6 +30,29 @@ services:
       retries: 10
     restart: unless-stopped
 
+  postgres-readonly-init:
+    image: postgres:17-alpine
+    command:
+      [
+        "psql",
+        "--host=postgres",
+        "--username=${POSTGRES_USER:-forty_two}",
+        "--dbname=${POSTGRES_DB:-forty_two}",
+        "--file=/opt/forty-two/init-readonly-postgres.sql",
+        "--set=ON_ERROR_STOP=1",
+        "--set=owner_user=${POSTGRES_USER:-forty_two}",
+        "--set=reader_user=forty_two_reader",
+        "--set=reader_password=${POSTGRES_READER_PASSWORD:?Set POSTGRES_READER_PASSWORD in .env}",
+      ]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./scripts/init-readonly-postgres.sql:/opt/forty-two/init-readonly-postgres.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   data-source-mcp:
     image: forty-two-data-source-mcp:local
     build:
@@ -42,9 +65,17 @@ services:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
       MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-}"
       SHUTDOWN_TIMEOUT_MS: ${DATA_SOURCE_MCP_SHUTDOWN_TIMEOUT_MS:-15000}
-      DATA_SOURCE_CONNECTIONS_JSON: "${DATA_SOURCE_CONNECTIONS_JSON:-[]}"
+      DATA_SOURCE_CONNECTIONS_JSON: "${DATA_SOURCE_CONNECTIONS_JSON:-}"
+      PLATFORM_POSTGRES_HOST: postgres
+      PLATFORM_POSTGRES_PORT: 5432
+      PLATFORM_POSTGRES_USER: forty_two_reader
+      PLATFORM_POSTGRES_PASSWORD: ${POSTGRES_READER_PASSWORD:?Set POSTGRES_READER_PASSWORD in .env}
+      PLATFORM_POSTGRES_DATABASE: ${POSTGRES_DB:-forty_two}
     ports:
       - "127.0.0.1:${DATA_SOURCE_MCP_PORT:-8791}:8791"
+    depends_on:
+      postgres-readonly-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -101,6 +132,27 @@ services:
     stop_grace_period: 35s
     restart: unless-stopped
 
+  trueforge-bootstrap:
+    image: node:24-alpine
+    command: ["node", "/opt/forty-two/bootstrap-trueforge.mjs"]
+    environment:
+      TRUEFORGE_INTERNAL_URL: http://trueforge:8790
+      DATA_SOURCE_MCP_INTERNAL_URL: http://data-source-mcp:8791
+      DAYTONA_API_KEY: ${DAYTONA_API_KEY:?Set DAYTONA_API_KEY in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      FORTY_TWO_AGENT_NAME: ${FORTY_TWO_AGENT_NAME:-forty-two-data-agent}
+      FORTY_TWO_AGENT_SPEC_PATH: /opt/forty-two/agents/forty-two-data-agent.json
+    volumes:
+      - ./scripts/bootstrap-trueforge.mjs:/opt/forty-two/bootstrap-trueforge.mjs:ro
+      - ./config/agents:/opt/forty-two/agents:ro
+    depends_on:
+      data-source-mcp:
+        condition: service_healthy
+      trueforge:
+        condition: service_healthy
+    restart: "no"
+
   web:
     image: forty-two-web:local
     build:
@@ -128,8 +180,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      trueforge:
-        condition: service_healthy
+      trueforge-bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [

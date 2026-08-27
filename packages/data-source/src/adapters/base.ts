@@ -60,6 +60,14 @@ export interface DatabaseAdapter {
     timeout?: number,
   ): Promise<AdapterQueryResult>;
 
+  /** Execute a query that has already passed the read-only SQL validator. */
+  queryReadOnly(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult>;
+
   /**
    * Test the connection to the database
    */
@@ -104,6 +112,17 @@ export abstract class BaseAdapter implements DatabaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult>;
+
+  async queryReadOnly(
+    _sql: string,
+    _params?: QueryParameter[],
+    _maxRows?: number,
+    _timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    throw new Error(
+      `${this.getDataSourceType()} does not provide database-enforced read-only query execution`,
+    );
+  }
   abstract testConnection(): Promise<boolean>;
   abstract close(): Promise<void>;
   abstract getDataSourceType(): string;

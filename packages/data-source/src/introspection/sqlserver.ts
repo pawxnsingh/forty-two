@@ -211,9 +211,10 @@ export class SQLServerIntrospector extends BaseIntrospector {
                t.type as table_type,
                t.create_date,
                t.modify_date
-        FROM sys.tables t
+        FROM sys.objects t
         INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-        ${whereClause}
+        WHERE t.type IN ('U', 'V')
+        ${whereClause.replace(/^WHERE /, "AND ")}
         ORDER BY s.name, t.name
       `,
         undefined,
