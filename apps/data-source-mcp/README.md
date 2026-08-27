@@ -76,6 +76,11 @@ transactions, idempotency, and verification are implemented.
 
 ## Register with local TrueForge
 
+The root Compose platform registers this service automatically through the
+one-shot `trueforge-bootstrap` service, using the shared `MCP_AUTH_TOKEN` from
+the ignored root `.env` file. The steps below are only needed when running the
+MCP server or TrueForge outside the root Compose project.
+
 In the TrueForge settings UI, create a remote MCP server with:
 
 ```text

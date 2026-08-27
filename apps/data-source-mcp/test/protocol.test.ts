@@ -85,6 +85,32 @@ test("serves authenticated MCP tools and rejects anonymous requests", async (con
     listed.tools.every((tool) => tool.annotations?.readOnlyHint),
     true,
   );
+  assert.equal(
+    listed.tools.every(
+      (tool) =>
+        tool.annotations?.destructiveHint === false &&
+        tool.annotations?.idempotentHint === true &&
+        typeof tool.description === "string" &&
+        tool.description.length >= 150,
+    ),
+    true,
+  );
+  const descriptions = Object.fromEntries(
+    listed.tools.map((tool) => [tool.name, tool.description]),
+  );
+  assert.match(
+    descriptions.list_data_sources ?? "",
+    /Credentials are never returned/,
+  );
+  assert.match(
+    descriptions.describe_table ?? "",
+    /exact returned identifiers and types/,
+  );
+  assert.match(
+    descriptions.run_read_query ?? "",
+    /bounded, read-only SQL query/,
+  );
+  assert.match(descriptions.run_read_query ?? "", /Never infer missing rows/);
 
   const result = await client.callTool({
     name: "list_data_sources",

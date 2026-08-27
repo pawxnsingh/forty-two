@@ -15,10 +15,11 @@ Initialize the submodule after cloning:
 git submodule update --init --recursive
 ```
 
-Copy `.env.example` to `.env`, then set `POSTGRES_PASSWORD` and
-`MCP_AUTH_TOKEN` to separate long, unique values. `openssl rand -hex 32`
-produces URL-safe local-development secrets. Compose fails fast when either
-value is missing.
+Copy `.env.example` to `.env`, then set `POSTGRES_PASSWORD`, `MCP_AUTH_TOKEN`,
+`DAYTONA_API_KEY`, and `OPENAI_API_KEY`. Use separate long, unique values for
+the database and MCP secrets; `openssl rand -hex 32` produces URL-safe
+local-development secrets. Compose fails fast when a required value is
+missing.
 
 ```sh
 cp .env.example .env
@@ -29,6 +30,23 @@ Then start the complete stack:
 ```sh
 docker compose up --build
 ```
+
+The one-shot `trueforge-bootstrap` service automatically configures OpenAI and
+Daytona, then registers the authenticated datasource MCP server in TrueForge.
+It also verifies that TrueForge can discover the MCP tools and creates or
+updates the named `forty-two-data-agent` from
+`config/agents/forty-two-data-agent.json`. Real credentials remain in the
+ignored `.env` file and TrueForge's settings database; the agent spec contains
+only resource references and no secrets.
+
+After the stack is healthy, run the live integration check:
+
+```sh
+pnpm test:platform-integration
+```
+
+This creates a TrueForge test session that runs Code Mode in Daytona and
+queries local PostgreSQL through the authenticated datasource MCP bridge.
 
 - Next.js: http://localhost:3000
 - TrueForge UI and API: http://localhost:8790

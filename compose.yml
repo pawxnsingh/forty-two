@@ -101,6 +101,27 @@ services:
     stop_grace_period: 35s
     restart: unless-stopped
 
+  trueforge-bootstrap:
+    image: node:24-alpine
+    command: ["node", "/opt/forty-two/bootstrap-trueforge.mjs"]
+    environment:
+      TRUEFORGE_INTERNAL_URL: http://trueforge:8790
+      DATA_SOURCE_MCP_INTERNAL_URL: http://data-source-mcp:8791
+      DAYTONA_API_KEY: ${DAYTONA_API_KEY:?Set DAYTONA_API_KEY in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      FORTY_TWO_AGENT_NAME: ${FORTY_TWO_AGENT_NAME:-forty-two-data-agent}
+      FORTY_TWO_AGENT_SPEC_PATH: /opt/forty-two/agents/forty-two-data-agent.json
+    volumes:
+      - ./scripts/bootstrap-trueforge.mjs:/opt/forty-two/bootstrap-trueforge.mjs:ro
+      - ./config/agents:/opt/forty-two/agents:ro
+    depends_on:
+      data-source-mcp:
+        condition: service_healthy
+      trueforge:
+        condition: service_healthy
+    restart: "no"
+
   web:
     image: forty-two-web:local
     build:
@@ -128,8 +149,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      trueforge:
-        condition: service_healthy
+      trueforge-bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
