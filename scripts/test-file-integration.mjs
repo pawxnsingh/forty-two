@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
+import {
+  discoverSandboxEvents,
+  listAllEventPages,
+} from "./lib/integration-events.mjs";
+
 const trueforgeUrl = normalizeUrl(
   process.env.TRUEFORGE_URL ?? "http://127.0.0.1:8790",
 );
@@ -112,13 +117,15 @@ try {
 
 async function getTurnEvents() {
   if (!sessionId || !turnId) return [];
-  const response = await requestTrueforge(
-    `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events?limit=100&order=asc`,
-  );
-  if (!Array.isArray(response.data)) {
-    throw new Error("TrueForge did not return turn events.");
-  }
-  return response.data;
+  return listAllEventPages(async (pageToken) => {
+    const url = new URL(
+      `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`,
+    );
+    url.searchParams.set("limit", "100");
+    url.searchParams.set("order", "asc");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    return requestTrueforge(url.toString());
+  });
 }
 
 async function cleanup() {
@@ -134,17 +141,17 @@ async function cleanup() {
     }
   }
 
-  let eventDiscoverySucceeded = events.length > 0 || !turnId;
-  if (!eventDiscoverySucceeded && sessionId && turnId) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        events = await getTurnEvents();
-        eventDiscoverySucceeded = true;
-        break;
-      } catch (error) {
-        if (attempt === 3) errors.push(error);
-        else await delay(attempt * 250);
-      }
+  let sandboxDispositionKnown = !turnId;
+  if (sessionId && turnId) {
+    try {
+      events = await discoverSandboxEvents({
+        initialEvents: events,
+        fetchEvents: getTurnEvents,
+        pause: delay,
+      });
+      sandboxDispositionKnown = true;
+    } catch (error) {
+      errors.push(error);
     }
   }
 
@@ -173,7 +180,7 @@ async function cleanup() {
       errors.push(error);
     }
   }
-  if (sessionId && eventDiscoverySucceeded) {
+  if (sessionId && sandboxDispositionKnown) {
     try {
       await requestTrueforge(
         `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
@@ -182,7 +189,7 @@ async function cleanup() {
     } catch (error) {
       errors.push(error);
     }
-  } else if (sessionId) {
+  } else if (sessionId && !errors.length) {
     errors.push(
       new Error(
         `Retained TrueForge session ${sessionId} because sandbox discovery failed`,

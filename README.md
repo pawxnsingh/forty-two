@@ -15,11 +15,13 @@ Initialize the submodule after cloning:
 git submodule update --init --recursive
 ```
 
-Copy `.env.example` to `.env`, then set `POSTGRES_PASSWORD`, `MCP_AUTH_TOKEN`,
-`DAYTONA_API_KEY`, and `OPENAI_API_KEY`. Use separate long, unique values for
-the database and MCP secrets; `openssl rand -hex 32` produces URL-safe
-local-development secrets. Compose fails fast when a required value is
-missing.
+Copy `.env.example` to `.env`, then set `POSTGRES_PASSWORD`,
+`POSTGRES_READER_PASSWORD`, `MCP_AUTH_TOKEN`, `DAYTONA_API_KEY`, and
+`OPENAI_API_KEY`. Use a different long, unique value for each password or
+token; `openssl rand -hex 32` produces URL-safe local-development secrets.
+The owner password is used only by Postgres and TrueForge. The datasource MCP
+receives only the dedicated reader password. Compose fails fast when a
+required value is missing.
 
 ```sh
 cp .env.example .env
@@ -48,9 +50,11 @@ pnpm test:platform-integration
 This creates a TrueForge test session that runs Code Mode in Daytona and
 queries the automatically provisioned `local-postgres` source through the
 authenticated datasource MCP bridge and its dedicated read-only database role.
-The test compares the final nonce with short-lived, authenticated server-side
-MCP execution telemetry, then cancels any running turn and independently cleans
-up its TrueForge session and Daytona sandbox.
+The test rejects direct datasource tool calls and compares the actual Code Mode
+exec result and final nonce with short-lived, authenticated server-side MCP
+execution telemetry. It then cancels any running turn and independently cleans
+up its TrueForge session and Daytona sandbox. Cleanup walks every event page and
+retains the TrueForge session when sandbox disposition cannot be established.
 
 - Next.js: http://localhost:3000
 - TrueForge UI and API: http://localhost:8790

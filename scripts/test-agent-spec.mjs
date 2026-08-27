@@ -55,6 +55,7 @@ for (const secretPattern of [
   /OPENAI_API_KEY=/i,
   /DAYTONA_API_KEY=/i,
   /MCP_AUTH_TOKEN=/i,
+  /POSTGRES_READER_PASSWORD=/i,
 ]) {
   assert.doesNotMatch(serialized, secretPattern);
 }

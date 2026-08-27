@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  assertNoDirectDatasourceCalls,
+  correlatedCodeModeResults,
+  discoverSandboxEvents,
+  listAllEventPages,
+} from "./lib/integration-events.mjs";
+
 const trueforgeUrl = normalizeUrl(
   process.env.TRUEFORGE_URL ?? "http://127.0.0.1:8790",
 );
@@ -43,9 +50,9 @@ In sandboxed Python, import call_tool from mcp_client and:
 1. Call server "forty-two-data-source", tool "list_data_sources", with an empty body.
 2. Confirm "local-postgres" is present.
 3. Call server "forty-two-data-source", tool "run_read_query", with body {"dataSource":"local-postgres","sql":"SELECT current_database() AS database_name, md5(random()::text) AS nonce","maxRows":1,"requestId":"${queryRequestId}"}.
-4. Read the first returned row and print it.
+4. Print the returned object exactly once. Do not run another query or a second formatting script.
 
-Only after the real sandboxed MCP result is available, answer exactly in this shape:
+Copy database_name and nonce from that same returned row and answer exactly in this shape, with no other text:
 PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
           },
         ],
@@ -84,7 +91,9 @@ PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
     }
   }
 
-  if (!hasCorrelatedMcpExecution(events, queryRequestId)) {
+  assertNoDirectDatasourceCalls(events);
+  const codeModeResults = correlatedCodeModeResults(events, queryRequestId);
+  if (codeModeResults.length === 0) {
     throw new Error(
       "No correlated Daytona exec/tool response used the runner-issued MCP request id.",
     );
@@ -101,18 +110,29 @@ PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
       "Datasource MCP telemetry did not contain the expected row.",
     );
   }
-  const output = JSON.stringify(turn.state.output ?? {});
-  const result = output.match(
-    /PLATFORM_INTEGRATION_OK database=forty_two nonce=([a-f0-9]{32})/,
-  );
-  if (!result || verifiedRow.nonce !== result[1]) {
+  if (
+    !codeModeResults.some(
+      (content) =>
+        content.includes(verifiedRow.database_name) &&
+        content.includes(verifiedRow.nonce),
+    )
+  ) {
     throw new Error(
-      "The final answer did not match a nonce found in the correlated MCP tool response.",
+      "The correlated Daytona exec result did not contain the server-recorded MCP database and nonce.",
+    );
+  }
+  const output = JSON.stringify(turn.state.output ?? {});
+  if (
+    !output.includes(verifiedRow.database_name) ||
+    !output.includes(verifiedRow.nonce)
+  ) {
+    throw new Error(
+      `The final answer did not match the server-recorded MCP nonce. Final output: ${output.slice(0, 1_000)}`,
     );
   }
 
   console.log(
-    `Platform integration passed (turn=${turnId}, nonce=${result[1]}, events=${events.length}).`,
+    `Platform integration passed (turn=${turnId}, nonce=${verifiedRow.nonce}, events=${events.length}).`,
   );
   testPassed = true;
 } finally {
@@ -121,57 +141,6 @@ PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
   } catch (error) {
     if (testPassed) throw error;
     console.error(`Integration cleanup also failed: ${String(error)}`);
-  }
-}
-
-function hasCorrelatedMcpExecution(turnEvents, requestId) {
-  const execCalls = new Map();
-  for (const event of turnEvents) {
-    if (event.type !== "model.message" || !Array.isArray(event.tool_calls))
-      continue;
-    for (const call of event.tool_calls) {
-      const isExec =
-        call?.tool_info?.name === "exec" ||
-        call?.function?.name === "exec" ||
-        call?.function?.name?.endsWith("__exec");
-      if (!isExec || typeof call.id !== "string") continue;
-      const args = parseJson(call.function.arguments);
-      const command = [args?.command, args?.cmd, args?.code].find(
-        (value) => typeof value === "string",
-      );
-      if (
-        typeof command === "string" &&
-        command.includes("forty-two-data-source") &&
-        command.includes("run_read_query") &&
-        command.includes("local-postgres") &&
-        command.includes(requestId) &&
-        (command.includes("call_tool") ||
-          command.includes("mcp-client call-tool"))
-      ) {
-        execCalls.set(call.id, command);
-      }
-    }
-  }
-
-  for (const event of turnEvents) {
-    if (
-      event.type !== "tool.response" ||
-      !execCalls.has(event.tool_call_id) ||
-      typeof event.content !== "string"
-    ) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-function parseJson(value) {
-  if (typeof value !== "string") return undefined;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
   }
 }
 
@@ -192,13 +161,15 @@ async function requestMcpExecution(requestId) {
 
 async function getTurnEvents() {
   if (!sessionId || !turnId) return [];
-  const response = await requestTrueforge(
-    `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events?limit=100&order=asc`,
-  );
-  if (!Array.isArray(response.data)) {
-    throw new Error("TrueForge did not return turn events.");
-  }
-  return response.data;
+  return listAllEventPages(async (pageToken) => {
+    const url = new URL(
+      `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`,
+    );
+    url.searchParams.set("limit", "100");
+    url.searchParams.set("order", "asc");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+    return requestTrueforge(url.toString());
+  });
 }
 
 async function cleanup() {
@@ -214,17 +185,17 @@ async function cleanup() {
     }
   }
 
-  let eventDiscoverySucceeded = events.length > 0 || !turnId;
-  if (!eventDiscoverySucceeded && sessionId && turnId) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        events = await getTurnEvents();
-        eventDiscoverySucceeded = true;
-        break;
-      } catch (error) {
-        if (attempt === 3) errors.push(error);
-        else await delay(attempt * 250);
-      }
+  let sandboxDispositionKnown = !turnId;
+  if (sessionId && turnId) {
+    try {
+      events = await discoverSandboxEvents({
+        initialEvents: events,
+        fetchEvents: getTurnEvents,
+        pause: delay,
+      });
+      sandboxDispositionKnown = true;
+    } catch (error) {
+      errors.push(error);
     }
   }
 
@@ -241,7 +212,7 @@ async function cleanup() {
       errors.push(error);
     }
   }
-  if (sessionId && eventDiscoverySucceeded) {
+  if (sessionId && sandboxDispositionKnown) {
     try {
       await requestTrueforge(
         `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
@@ -250,7 +221,7 @@ async function cleanup() {
     } catch (error) {
       errors.push(error);
     }
-  } else if (sessionId) {
+  } else if (sessionId && !errors.length) {
     errors.push(
       new Error(
         `Retained TrueForge session ${sessionId} because sandbox discovery failed`,
