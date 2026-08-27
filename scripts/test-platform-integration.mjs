@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const trueforgeUrl = normalizeUrl(
   process.env.TRUEFORGE_URL ?? "http://127.0.0.1:8790",
 );
@@ -5,6 +7,11 @@ const daytonaUrl = normalizeUrl(
   process.env.DAYTONA_API_URL ?? "https://app.daytona.io/api",
 );
 const daytonaApiKey = requiredSecret("DAYTONA_API_KEY");
+const dataSourceMcpUrl = normalizeUrl(
+  process.env.DATA_SOURCE_MCP_URL ?? "http://127.0.0.1:8791",
+);
+const mcpAuthToken = requiredSecret("MCP_AUTH_TOKEN");
+const queryRequestId = randomUUID();
 const agentName =
   process.env.FORTY_TWO_AGENT_NAME?.trim() || "forty-two-data-agent";
 
@@ -35,7 +42,7 @@ try {
 In sandboxed Python, import call_tool from mcp_client and:
 1. Call server "forty-two-data-source", tool "list_data_sources", with an empty body.
 2. Confirm "local-postgres" is present.
-3. Call server "forty-two-data-source", tool "run_read_query", with body {"dataSource":"local-postgres","sql":"SELECT current_database() AS database_name, md5(random()::text) AS nonce","maxRows":1}.
+3. Call server "forty-two-data-source", tool "run_read_query", with body {"dataSource":"local-postgres","sql":"SELECT current_database() AS database_name, md5(random()::text) AS nonce","maxRows":1,"requestId":"${queryRequestId}"}.
 4. Read the first returned row and print it.
 
 Only after the real sandboxed MCP result is available, answer exactly in this shape:
@@ -77,17 +84,28 @@ PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
     }
   }
 
-  const verifiedRows = verifiedMcpRows(events);
-  if (verifiedRows.length === 0) {
+  if (!hasCorrelatedMcpExecution(events, queryRequestId)) {
     throw new Error(
-      "No correlated Daytona exec/tool response proved that run_read_query returned the database row.",
+      "No correlated Daytona exec/tool response used the runner-issued MCP request id.",
+    );
+  }
+  const execution = await requestMcpExecution(queryRequestId);
+  const verifiedRow = execution.rows?.[0];
+  if (
+    execution.dataSource !== "local-postgres" ||
+    verifiedRow?.database_name !== "forty_two" ||
+    typeof verifiedRow.nonce !== "string" ||
+    !/^[a-f0-9]{32}$/.test(verifiedRow.nonce)
+  ) {
+    throw new Error(
+      "Datasource MCP telemetry did not contain the expected row.",
     );
   }
   const output = JSON.stringify(turn.state.output ?? {});
   const result = output.match(
     /PLATFORM_INTEGRATION_OK database=forty_two nonce=([a-f0-9]{32})/,
   );
-  if (!result || !verifiedRows.some((row) => row.nonce === result[1])) {
+  if (!result || verifiedRow.nonce !== result[1]) {
     throw new Error(
       "The final answer did not match a nonce found in the correlated MCP tool response.",
     );
@@ -106,7 +124,7 @@ PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
   }
 }
 
-function verifiedMcpRows(turnEvents) {
+function hasCorrelatedMcpExecution(turnEvents, requestId) {
   const execCalls = new Map();
   for (const event of turnEvents) {
     if (event.type !== "model.message" || !Array.isArray(event.tool_calls))
@@ -126,8 +144,7 @@ function verifiedMcpRows(turnEvents) {
         command.includes("forty-two-data-source") &&
         command.includes("run_read_query") &&
         command.includes("local-postgres") &&
-        command.includes("rows") &&
-        command.includes("nonce") &&
+        command.includes(requestId) &&
         (command.includes("call_tool") ||
           command.includes("mcp-client call-tool"))
       ) {
@@ -136,7 +153,6 @@ function verifiedMcpRows(turnEvents) {
     }
   }
 
-  const rows = [];
   for (const event of turnEvents) {
     if (
       event.type !== "tool.response" ||
@@ -145,46 +161,9 @@ function verifiedMcpRows(turnEvents) {
     ) {
       continue;
     }
-    for (const value of unfoldJson(event.content)) {
-      if (
-        value?.database_name === "forty_two" &&
-        typeof value.nonce === "string" &&
-        /^[a-f0-9]{32}$/.test(value.nonce)
-      ) {
-        rows.push(value);
-      }
-    }
-    // Daytona's exec response may contain the MCP JSON as an escaped stdout
-    // string with surrounding non-JSON text. Preserve correlation to the exec
-    // call, but decode that wire form as a fallback.
-    const decodedContent = event.content.replaceAll('\\"', '"');
-    const rowMatch = decodedContent.match(
-      /"database_name"\s*:\s*"forty_two"[\s\S]*?"nonce"\s*:\s*"([a-f0-9]{32})"/,
-    );
-    if (rowMatch) {
-      rows.push({ database_name: "forty_two", nonce: rowMatch[1] });
-    }
-    const markerMatch = decodedContent.match(
-      /PLATFORM_INTEGRATION_OK database=forty_two nonce=([a-f0-9]{32})/,
-    );
-    if (markerMatch) {
-      rows.push({ database_name: "forty_two", nonce: markerMatch[1] });
-    }
+    return true;
   }
-  return rows;
-}
-
-function unfoldJson(value, found = []) {
-  if (typeof value === "string") {
-    const parsed = parseJson(value);
-    if (parsed !== undefined) unfoldJson(parsed, found);
-  } else if (Array.isArray(value)) {
-    for (const item of value) unfoldJson(item, found);
-  } else if (value && typeof value === "object") {
-    found.push(value);
-    for (const nested of Object.values(value)) unfoldJson(nested, found);
-  }
-  return found;
+  return false;
 }
 
 function parseJson(value) {
@@ -194,6 +173,21 @@ function parseJson(value) {
   } catch {
     return undefined;
   }
+}
+
+async function requestMcpExecution(requestId) {
+  const response = await fetch(
+    `${dataSourceMcpUrl}/internal/query-executions/${encodeURIComponent(requestId)}`,
+    {
+      headers: { authorization: `Bearer ${mcpAuthToken}` },
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  const body = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    throw new Error(`Datasource MCP telemetry failed (${response.status}).`);
+  }
+  return body?.data ?? {};
 }
 
 async function getTurnEvents() {
@@ -208,9 +202,32 @@ async function getTurnEvents() {
 }
 
 async function cleanup() {
-  if (events.length === 0 && sessionId && turnId) {
-    events = await getTurnEvents().catch(() => []);
+  const errors = [];
+  if (sessionId) {
+    try {
+      await requestTrueforge(
+        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`,
+        { method: "POST", body: {} },
+      );
+    } catch (error) {
+      errors.push(error);
+    }
   }
+
+  let eventDiscoverySucceeded = events.length > 0 || !turnId;
+  if (!eventDiscoverySucceeded && sessionId && turnId) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        events = await getTurnEvents();
+        eventDiscoverySucceeded = true;
+        break;
+      } catch (error) {
+        if (attempt === 3) errors.push(error);
+        else await delay(attempt * 250);
+      }
+    }
+  }
+
   const sandboxIds = new Set(
     events
       .filter((event) => event.type === "sandbox.created")
@@ -218,13 +235,30 @@ async function cleanup() {
       .filter(Boolean),
   );
   for (const sandboxId of sandboxIds) {
-    await deleteDaytonaSandbox(sandboxId);
+    try {
+      await deleteDaytonaSandbox(sandboxId);
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  if (sessionId) {
-    await requestTrueforge(
-      `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-      { method: "DELETE" },
+  if (sessionId && eventDiscoverySucceeded) {
+    try {
+      await requestTrueforge(
+        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+        { method: "DELETE" },
+      );
+    } catch (error) {
+      errors.push(error);
+    }
+  } else if (sessionId) {
+    errors.push(
+      new Error(
+        `Retained TrueForge session ${sessionId} because sandbox discovery failed`,
+      ),
     );
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Integration cleanup was incomplete");
   }
 }
 

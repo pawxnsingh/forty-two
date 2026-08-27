@@ -63,7 +63,6 @@ test("provisions the Compose PostgreSQL source when no custom JSON is supplied",
   const config = loadServerConfig({
     MCP_AUTH_TOKEN: "test-token",
     PLATFORM_POSTGRES_HOST: "postgres",
-    PLATFORM_POSTGRES_USER: "forty_two",
     PLATFORM_POSTGRES_PASSWORD: "database-secret",
     PLATFORM_POSTGRES_DATABASE: "forty_two",
   });
@@ -71,6 +70,11 @@ test("provisions the Compose PostgreSQL source when no custom JSON is supplied",
   assert.equal(config.connections.length, 1);
   assert.equal(config.connections[0]?.name, "local-postgres");
   assert.equal(config.connections[0]?.type, "postgres");
+  const credentials = config.connections[0]?.credentials;
+  assert.equal(
+    credentials && "username" in credentials ? credentials.username : undefined,
+    "forty_two_reader",
+  );
   assert.equal(
     config.connections[0]?.credentials.default_database,
     "forty_two",

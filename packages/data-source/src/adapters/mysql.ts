@@ -110,6 +110,28 @@ export class MySQLAdapter extends BaseAdapter {
     );
   }
 
+  async queryReadOnly(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(async () => {
+      await this.ensureUsableConnection();
+      if (!this.connection) throw new Error("MySQL connection not initialized");
+
+      await this.executeQuery("START TRANSACTION READ ONLY");
+      try {
+        const result = await this.queryExclusive(sql, params, maxRows, timeout);
+        await this.executeQuery("ROLLBACK");
+        return result;
+      } catch (error) {
+        await this.executeQuery("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
   private async queryExclusive(
     sql: string,
     params?: QueryParameter[],

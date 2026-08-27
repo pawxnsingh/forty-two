@@ -47,9 +47,10 @@ pnpm test:platform-integration
 
 This creates a TrueForge test session that runs Code Mode in Daytona and
 queries the automatically provisioned `local-postgres` source through the
-authenticated datasource MCP bridge. The test correlates the final nonce with
-the real MCP tool response, then deletes its TrueForge session and Daytona
-sandbox.
+authenticated datasource MCP bridge and its dedicated read-only database role.
+The test compares the final nonce with short-lived, authenticated server-side
+MCP execution telemetry, then cancels any running turn and independently cleans
+up its TrueForge session and Daytona sandbox.
 
 - Next.js: http://localhost:3000
 - TrueForge UI and API: http://localhost:8790

@@ -69,6 +69,13 @@ test("rejects unrecognized, qualified, and security-sensitive SELECT functions",
   );
 });
 
+test("rejects SELECT assignments to MySQL session variables", () => {
+  assert.equal(
+    checkQueryIsReadOnly("SELECT @agent_mode := 'write'", "mysql").isReadOnly,
+    false,
+  );
+});
+
 test("runs PostgreSQL MCP reads inside a database-enforced read-only transaction", async () => {
   const adapter = new PostgreSQLAdapter();
   const calls: string[] = [];
@@ -95,6 +102,39 @@ test("runs PostgreSQL MCP reads inside a database-enforced read-only transaction
     "SELECT 1",
     "ROLLBACK",
   ]);
+});
+
+test("runs MySQL MCP reads inside a database-enforced read-only transaction", async () => {
+  const adapter = new MySQLAdapter();
+  const calls: string[] = [];
+  Object.assign(adapter, {
+    connected: true,
+    connection: {
+      execute(
+        sql: string,
+        _params: unknown,
+        callback: (error: null, rows: unknown[], fields: unknown[]) => void,
+      ) {
+        calls.push(sql);
+        callback(null, sql === "SELECT 1" ? [{ value: 1 }] : [], []);
+      },
+    },
+  });
+
+  const result = await adapter.queryReadOnly("SELECT 1");
+  assert.deepEqual(result.rows, [{ value: 1 }]);
+  assert.deepEqual(calls, [
+    "START TRANSACTION READ ONLY",
+    "SELECT 1",
+    "ROLLBACK",
+  ]);
+});
+
+test("connectors without a database read-only execution mode fail closed", async () => {
+  await assert.rejects(
+    new BigQueryAdapter().queryReadOnly("SELECT 1"),
+    /does not provide database-enforced read-only query execution/,
+  );
 });
 
 test("rejects SQL Server locking table hints", () => {

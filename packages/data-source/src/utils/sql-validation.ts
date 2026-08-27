@@ -154,7 +154,7 @@ function hasMeaningfulIntoClause(statement: Record<string, unknown>): boolean {
 
 function findSelectSideEffect(
   value: unknown,
-): "into" | "locking_read" | undefined {
+): "into" | "locking_read" | "session_assignment" | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
       const sideEffect = findSelectSideEffect(item);
@@ -164,6 +164,8 @@ function findSelectSideEffect(
   }
 
   if (!isRecord(value)) return undefined;
+
+  if (value.type === "assign") return "session_assignment";
 
   if (value.type === "select") {
     if (hasMeaningfulIntoClause(value)) return "into";
@@ -300,6 +302,14 @@ export function checkQueryIsReadOnly(
             queryType,
             error:
               "Locking SELECT statements are not allowed for read-only access.",
+          };
+        }
+        if (sideEffect === "session_assignment") {
+          return {
+            isReadOnly: false,
+            queryType,
+            error:
+              "SELECT statements that assign session variables are not allowed for read-only access.",
           };
         }
 

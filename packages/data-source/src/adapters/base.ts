@@ -114,12 +114,14 @@ export abstract class BaseAdapter implements DatabaseAdapter {
   ): Promise<AdapterQueryResult>;
 
   async queryReadOnly(
-    sql: string,
-    params?: QueryParameter[],
-    maxRows?: number,
-    timeout?: number,
+    _sql: string,
+    _params?: QueryParameter[],
+    _maxRows?: number,
+    _timeout?: number,
   ): Promise<AdapterQueryResult> {
-    return this.query(sql, params, maxRows, timeout);
+    throw new Error(
+      `${this.getDataSourceType()} does not provide database-enforced read-only query execution`,
+    );
   }
   abstract testConnection(): Promise<boolean>;
   abstract close(): Promise<void>;

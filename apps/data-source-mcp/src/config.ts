@@ -75,7 +75,8 @@ function resolveConnections(
   if (!password) return [];
   const database =
     environment.PLATFORM_POSTGRES_DATABASE?.trim() || "forty_two";
-  const username = environment.PLATFORM_POSTGRES_USER?.trim() || "forty_two";
+  const username =
+    environment.PLATFORM_POSTGRES_USER?.trim() || "forty_two_reader";
   const port = parsePositiveInteger(
     environment.PLATFORM_POSTGRES_PORT,
     5432,

@@ -122,9 +122,32 @@ async function getTurnEvents() {
 }
 
 async function cleanup() {
-  if (events.length === 0 && sessionId && turnId) {
-    events = await getTurnEvents().catch(() => []);
+  const errors = [];
+  if (sessionId) {
+    try {
+      await requestTrueforge(
+        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`,
+        { method: "POST", body: {} },
+      );
+    } catch (error) {
+      errors.push(error);
+    }
   }
+
+  let eventDiscoverySucceeded = events.length > 0 || !turnId;
+  if (!eventDiscoverySucceeded && sessionId && turnId) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        events = await getTurnEvents();
+        eventDiscoverySucceeded = true;
+        break;
+      } catch (error) {
+        if (attempt === 3) errors.push(error);
+        else await delay(attempt * 250);
+      }
+    }
+  }
+
   const sandboxIds = new Set(
     events
       .filter((event) => event.type === "sandbox.created")
@@ -132,23 +155,42 @@ async function cleanup() {
       .filter(Boolean),
   );
   for (const sandboxId of sandboxIds) {
-    const response = await fetch(
-      `${daytonaUrl}/sandbox/${encodeURIComponent(sandboxId)}`,
-      {
-        method: "DELETE",
-        headers: { authorization: `Bearer ${daytonaApiKey}` },
-        signal: AbortSignal.timeout(60_000),
-      },
-    );
-    if (!response.ok && response.status !== 404) {
-      throw new Error(`Daytona sandbox deletion failed (${response.status}).`);
+    try {
+      const response = await fetch(
+        `${daytonaUrl}/sandbox/${encodeURIComponent(sandboxId)}`,
+        {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${daytonaApiKey}` },
+          signal: AbortSignal.timeout(60_000),
+        },
+      );
+      if (!response.ok && response.status !== 404) {
+        throw new Error(
+          `Daytona sandbox deletion failed (${response.status}).`,
+        );
+      }
+    } catch (error) {
+      errors.push(error);
     }
   }
-  if (sessionId) {
-    await requestTrueforge(
-      `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-      { method: "DELETE" },
+  if (sessionId && eventDiscoverySucceeded) {
+    try {
+      await requestTrueforge(
+        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+        { method: "DELETE" },
+      );
+    } catch (error) {
+      errors.push(error);
+    }
+  } else if (sessionId) {
+    errors.push(
+      new Error(
+        `Retained TrueForge session ${sessionId} because sandbox discovery failed`,
+      ),
     );
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Integration cleanup was incomplete");
   }
 }
 

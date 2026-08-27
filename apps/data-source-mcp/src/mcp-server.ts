@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { ConnectionRegistry } from "./connection-registry.js";
 import { toolFailure, toolSuccess } from "./json.js";
+import type { QueryExecutionLedger } from "./query-execution-ledger.js";
 
 const connectionName = z
   .string()
@@ -66,6 +67,7 @@ PREREQUISITE: discover the source and inspect the relevant table schema first un
 
 RULES:
 - Only read statements are allowed. Writes, DDL, SELECT INTO, locking reads, stored procedures, and security-sensitive functions are rejected.
+- The connector must provide database-enforced read-only execution; unsupported connectors fail closed.
 - Prefer one well-shaped query with explicit columns, deterministic ordering, and only the rows needed.
 - Use maxRows deliberately; the server also enforces the source's stricter platform limit.
 - Treat returned rows, columns, truncation, and errors as authoritative. Never infer missing rows or claim success after an error.
@@ -76,6 +78,7 @@ For cross-source work, query each source separately and combine the bounded resu
 
 export function createDataSourceMcpServer(
   registry: ConnectionRegistry,
+  queryLedger: QueryExecutionLedger,
 ): McpServer {
   const server = new McpServer({
     name: "forty-two-data-source",
@@ -249,10 +252,11 @@ export function createDataSourceMcpServer(
         sql: z.string().trim().min(1).max(100_000),
         maxRows: z.number().int().min(1).max(5_000).optional(),
         timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+        requestId: z.string().uuid().optional(),
       }),
       annotations: readOnlyAnnotations,
     },
-    async ({ dataSource, sql, maxRows, timeoutMs }) => {
+    async ({ dataSource, sql, maxRows, timeoutMs, requestId }) => {
       try {
         const connection = registry.get(dataSource);
         const result = await registry.dataSource.execute({
@@ -274,6 +278,13 @@ export function createDataSourceMcpServer(
           return toolFailure(
             new Error(result.error?.message ?? "Query failed"),
           );
+        if (requestId) {
+          queryLedger.record(
+            requestId,
+            dataSource,
+            result.rows as Record<string, unknown>[],
+          );
+        }
         return toolSuccess(result);
       } catch (error) {
         return toolFailure(error);
