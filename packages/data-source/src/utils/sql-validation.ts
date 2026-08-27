@@ -48,6 +48,95 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+// Function calls are the one important hole in a statement-type-only check:
+// SELECT attacker_function() is syntactically a read but a UDF can write data,
+// access files, or change server state. Keep this deliberately conservative.
+// Aggregates are represented separately by node-sql-parser and remain allowed.
+const READ_ONLY_FUNCTIONS = new Set([
+  "abs",
+  "acos",
+  "asin",
+  "atan",
+  "atan2",
+  "ceil",
+  "ceiling",
+  "char_length",
+  "coalesce",
+  "concat",
+  "concat_ws",
+  "current_database",
+  "current_schema",
+  "date_part",
+  "date_trunc",
+  "floor",
+  "greatest",
+  "json_array_length",
+  "json_extract_path",
+  "json_extract_path_text",
+  "jsonb_array_length",
+  "jsonb_extract_path",
+  "jsonb_extract_path_text",
+  "least",
+  "left",
+  "length",
+  "lower",
+  "lpad",
+  "ltrim",
+  "md5",
+  "now",
+  "nullif",
+  "power",
+  "random",
+  "regexp_replace",
+  "replace",
+  "reverse",
+  "right",
+  "round",
+  "rpad",
+  "rtrim",
+  "sqrt",
+  "strpos",
+  "substring",
+  "to_char",
+  "to_date",
+  "to_number",
+  "to_timestamp",
+  "trim",
+  "upper",
+]);
+
+function parsedFunctionName(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schema !== null && value.schema !== undefined) return undefined;
+  const parts = value.name;
+  if (!Array.isArray(parts) || parts.length !== 1 || !isRecord(parts[0])) {
+    return undefined;
+  }
+  const name = parts[0].value;
+  return typeof name === "string" ? name.toLowerCase() : undefined;
+}
+
+function findDisallowedFunction(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const name = findDisallowedFunction(item);
+      if (name) return name;
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) return undefined;
+
+  if (value.type === "function") {
+    const name = parsedFunctionName(value.name);
+    if (!name || !READ_ONLY_FUNCTIONS.has(name)) return name ?? "qualified";
+  }
+  for (const nested of Object.values(value)) {
+    const name = findDisallowedFunction(nested);
+    if (name) return name;
+  }
+  return undefined;
+}
+
 function hasMeaningfulIntoClause(statement: Record<string, unknown>): boolean {
   const into = statement.into;
   if (into === null || into === undefined) return false;
@@ -211,6 +300,18 @@ export function checkQueryIsReadOnly(
             queryType,
             error:
               "Locking SELECT statements are not allowed for read-only access.",
+          };
+        }
+
+        const disallowedFunction = findDisallowedFunction(statement);
+        if (disallowedFunction) {
+          return {
+            isReadOnly: false,
+            queryType,
+            error:
+              disallowedFunction === "qualified"
+                ? "Schema-qualified and unrecognized functions are not allowed in read-only queries."
+                : `Function '${disallowedFunction}' is not on the read-only function allowlist.`,
           };
         }
       }

@@ -107,6 +107,28 @@ export class PostgreSQLAdapter extends BaseAdapter {
     );
   }
 
+  async queryReadOnly(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(async () => {
+      this.ensureConnected();
+      if (!this.client) throw new Error("PostgreSQL client not initialized");
+
+      await this.client.query("BEGIN READ ONLY");
+      try {
+        const result = await this.queryExclusive(sql, params, maxRows, timeout);
+        await this.client.query("ROLLBACK");
+        return result;
+      } catch (error) {
+        await this.client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
   private async queryExclusive(
     sql: string,
     params?: QueryParameter[],

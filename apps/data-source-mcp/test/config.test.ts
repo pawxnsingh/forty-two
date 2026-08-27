@@ -59,6 +59,24 @@ test("loads server-side connection configuration without exposing defaults", () 
   });
 });
 
+test("provisions the Compose PostgreSQL source when no custom JSON is supplied", () => {
+  const config = loadServerConfig({
+    MCP_AUTH_TOKEN: "test-token",
+    PLATFORM_POSTGRES_HOST: "postgres",
+    PLATFORM_POSTGRES_USER: "forty_two",
+    PLATFORM_POSTGRES_PASSWORD: "database-secret",
+    PLATFORM_POSTGRES_DATABASE: "forty_two",
+  });
+
+  assert.equal(config.connections.length, 1);
+  assert.equal(config.connections[0]?.name, "local-postgres");
+  assert.equal(config.connections[0]?.type, "postgres");
+  assert.equal(
+    config.connections[0]?.credentials.default_database,
+    "forty_two",
+  );
+});
+
 test("normalizes allowed HTTP origins and rejects URL-like impostors", () => {
   assert.deepEqual(
     parseAllowedOrigins("https://Example.com:443,http://localhost:3000"),

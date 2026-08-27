@@ -221,7 +221,6 @@ export class PostgreSQLIntrospector extends BaseIntrospector {
         LEFT JOIN pg_class c ON c.relname = t.table_name
         LEFT JOIN pg_namespace n ON c.relnamespace = n.oid AND n.nspname = t.table_schema
         ${whereClause}
-        AND t.table_type != 'VIEW'
         ORDER BY schema, name
       `,
         undefined,

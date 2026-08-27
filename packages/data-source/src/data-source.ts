@@ -241,7 +241,7 @@ export class DataSource {
     }
 
     try {
-      const result = await adapter.query(
+      const result = await adapter.queryReadOnly(
         request.sql,
         request.params,
         maxRows,
