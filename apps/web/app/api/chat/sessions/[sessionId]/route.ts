@@ -5,6 +5,7 @@ import {
   trueForgeClient,
   validId,
 } from "../../../../../lib/server/chat-backend";
+import { listChatSessionDataSources } from "@forty-two/db";
 
 export const runtime = "nodejs";
 
@@ -22,12 +23,21 @@ export async function GET(
     const runtimeSession = await trueForgeClient().sessions.get(
       application.trueforgeSessionId!,
     );
+    const dataSources = await listChatSessionDataSources({
+      chatSessionId: application.id,
+    });
     const runtimeData: Record<string, unknown> = { ...runtimeSession.data };
     Reflect.deleteProperty(runtimeData, "id");
     return Response.json({
       data: {
         ...runtimeData,
         id: validId(sessionId, "session id"),
+        dataSources: dataSources.map((source) => ({
+          id: source.id,
+          name: source.name,
+          connectorType: source.connectorType,
+          status: source.status,
+        })),
       },
     });
   } catch (error) {

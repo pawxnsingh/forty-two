@@ -79,7 +79,11 @@ const weightedRateBullet =
 const followUpBullet =
   "For a presentation-only follow-up, reuse the nearest unambiguous committed table and preserve its source, filters, grain, and provenance; do not re-query. Re-query or recompute when the population, filter, grain, metric definition, source, or requested freshness changes. Ask only when multiple prior artifacts plausibly match.";
 const artifactIdentityBullet =
-  "For database results, `run_read_query` is side-effect-free. Use `create_query_table_artifact` explicitly when the bounded query result must be durable. Generate one UUID requestId for each genuinely new logical operation; after a timeout, disconnect, or lost response, retry the exact same source, SQL, artifact inputs, and requestId. Changed inputs require a new UUID. If the receipt says `sourceLimited: true`, do not use it for totals, joins, averages, or completeness claims; narrow or aggregate in SQL until the required result is not limited.";
+  "For database results, `run_read_query` is side-effect-free. Use `create_query_table_artifact` explicitly when the bounded query result must be durable. That tool performs and commits the artifact write itself: its returned artifact ID is final, and must never be passed to `finalize_table_artifact`. Generate one UUID requestId for each genuinely new logical operation; after a timeout, disconnect, or lost response, retry the exact same source, SQL, artifact inputs, and requestId. An explicit error is not ambiguous; inspect or repair its cause instead of retrying blindly with a new identity. Changed inputs require a new UUID. If the receipt says `sourceLimited: true`, do not use it for totals, joins, averages, or completeness claims; narrow or aggregate in SQL until the required result is not limited.";
+const emittedTableFinalizationBullet =
+  "After inspecting an `emit_table` receipt, call `finalize_table_artifact` exactly once with the exact sessionId and only its artifact ID/content hash, the intended title, and the same parents/source references. This finalization path is only for Daytona-generated tables. Finalization must succeed before that table is described as durable or passed to another artifact tool.";
+const chartPresentationBullet =
+  'In the final answer reference only user-facing committed artifacts using `<artifact_ref id="art_..." type="table|chart"/>`. A chart\'s source table is an internal dependency: do not reference or present it unless the user explicitly asks for that table.';
 
 function taggedPromptSection(prompt, name) {
   const section = prompt.match(
@@ -118,6 +122,16 @@ function assertAgentPromptClauses(prompt) {
     taggedPromptSection(prompt, "artifact_workflow"),
     artifactIdentityBullet,
     "artifact request identity",
+  );
+  assertCompleteBullet(
+    taggedPromptSection(prompt, "artifact_workflow"),
+    emittedTableFinalizationBullet,
+    "Daytona-only table finalization",
+  );
+  assertCompleteBullet(
+    taggedPromptSection(prompt, "artifact_workflow"),
+    chartPresentationBullet,
+    "chart source-table presentation",
   );
 }
 
@@ -242,10 +256,15 @@ const sessionContextTemplate = chatBackendSource.match(
   /const sessionContext = `(<session_context>[\s\S]*?<\/session_context>)`;/,
 )?.[1];
 assert.ok(sessionContextTemplate, "Missing dynamic session-instruction block.");
+const artifactWorkflowTemplate = chatBackendSource.match(
+  /export function artifactWorkflowInstructions\(\): string \{\s+return `([\s\S]*?)`;\s+\}/,
+)?.[1];
+assert.ok(artifactWorkflowTemplate, "Missing artifact workflow instructions.");
+const effectiveSessionInstructions = `${sessionContextTemplate}\n${artifactWorkflowTemplate}`;
 const newArtifactOperationClause =
-  "For each genuinely new logical create_query_table_artifact operation, generate a new UUID requestId.";
+  "For each genuinely new create_query_table_artifact operation, generate a new UUID requestId.";
 const ambiguousArtifactRetryClause =
-  "If its result is ambiguous, retry the exact same source, SQL, artifact inputs, and requestId; never create a second identity for that operation.";
+  "Retry the same requestId only when the result is ambiguous; an explicit error is not ambiguous and must not be retried blindly with a new identity.";
 
 function assertDynamicSessionClauses(sessionContext) {
   assert.ok(
@@ -258,7 +277,7 @@ function assertDynamicSessionClauses(sessionContext) {
   );
 }
 
-assertDynamicSessionClauses(sessionContextTemplate);
+assertDynamicSessionClauses(effectiveSessionInstructions);
 for (const mutation of [
   {
     label: "genuinely-new artifact UUID",
@@ -274,7 +293,7 @@ for (const mutation of [
   },
 ]) {
   const mutatedSessionContext = replaceContract(
-    sessionContextTemplate,
+    effectiveSessionInstructions,
     mutation.original,
     mutation.contradiction,
   );

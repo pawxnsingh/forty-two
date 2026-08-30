@@ -57,6 +57,7 @@ export function verifyArtifactBrowserCapability(input: {
   token: string;
   signingKey: string;
   now?: Date;
+  allowExpiredForSeconds?: number;
 }): ArtifactBrowserCapabilityClaims | null {
   try {
     const key = signingKey(input.signingKey);
@@ -87,7 +88,12 @@ export function verifyArtifactBrowserCapability(input: {
       JSON.parse(Buffer.from(payload, "base64url").toString("utf8")),
     );
     const nowSeconds = Math.floor((input.now ?? new Date()).getTime() / 1_000);
-    if (claims.iat > nowSeconds + 60 || claims.exp <= nowSeconds) return null;
+    const expiryGrace = Math.max(0, input.allowExpiredForSeconds ?? 0);
+    if (
+      claims.iat > nowSeconds + 60 ||
+      claims.exp + expiryGrace <= nowSeconds
+    )
+      return null;
     return claims;
   } catch {
     return null;

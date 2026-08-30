@@ -22,12 +22,14 @@ import {
   mintArtifactBrowserCapability,
   recordSqlChangeApproval,
   reserveChatTurnRequest,
+  rotateChatSessionCapability,
   softDeleteChatSession,
   SqlChangeConflictError,
   SqlChangeReplayError,
   type ChatSession,
   type ChatTurnRequest,
   type DataSourceId,
+  verifyArtifactBrowserCapability,
 } from "@forty-two/db";
 import { createHash, randomUUID } from "node:crypto";
 import { ZodError } from "zod";
@@ -161,6 +163,44 @@ export async function applicationSession(
     throw new ApiInputError("Chat session was not found.", 404);
   }
   return session;
+}
+
+export async function renewArtifactCapability(
+  request: Request,
+  applicationSessionId: string,
+): Promise<{ artifactCapability: string }> {
+  const authorization = request.headers.get("authorization") ?? "";
+  const match = /^Bearer ([^\s,]+)$/i.exec(authorization);
+  if (!match) throw new ApiInputError("Artifact capability was not found.", 404);
+
+  const claims = verifyArtifactBrowserCapability({
+    token: match[1]!,
+    signingKey: requiredEnvironment("MCP_CAPABILITY_SIGNING_KEY"),
+    allowExpiredForSeconds: 7 * 24 * 60 * 60,
+  });
+  if (!claims || claims.sub !== applicationSessionId) {
+    throw new ApiInputError("Artifact capability was not found.", 404);
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + capabilityTtlSeconds() * 1_000);
+  const renewed = await rotateChatSessionCapability({
+    chatSessionId: applicationSessionId,
+    capabilityId: claims.jti,
+    capabilityExpiresAt: expiresAt,
+  });
+  if (!renewed) {
+    throw new ApiInputError("Artifact capability was not found.", 404);
+  }
+  return {
+    artifactCapability: mintArtifactBrowserCapability({
+      chatSessionId: renewed.id,
+      capabilityId: renewed.capabilityId,
+      expiresAt: renewed.capabilityExpiresAt,
+      issuedAt: now,
+      signingKey: requiredEnvironment("MCP_CAPABILITY_SIGNING_KEY"),
+    }),
+  };
 }
 
 export async function trueforgeSessionId(
@@ -431,7 +471,8 @@ async function productAgentManifest(
         : `- database: ${source.id} (${source.name}, ${source.connectorType})`,
     )
     .join("\n");
-  const sessionContext = `<session_context>\nThe public Forty Two application session ID is ${applicationSessionId}. Pass this exact non-secret sessionId unchanged to every ${SHARED_DATA_SOURCE_MCP_NAME} datasource, file, database, SQL, table-artifact, and chart-artifact tool, to emit_table/load_table/visualize in Daytona, and to the forty-two-todo plan tool. Never substitute the TrueForge runtime ID.\nOnly these immutable datasource bindings are available:\n${sourceContext}\nFor every datasource-specific tool, also pass the exact bound dataSourceId shown above. For every file, call get_file_download_url on ${SHARED_DATA_SOURCE_MCP_NAME} from Daytona Code Mode, download Azure directly with the returned If-Match header, and verify both ETag and byte size before reading it. File bytes must never enter a TrueForge message or transit the Forty Two web server. run_read_query is side-effect-free. For each genuinely new logical create_query_table_artifact operation, generate a new UUID requestId. If its result is ambiguous, retry the exact same source, SQL, artifact inputs, and requestId; never create a second identity for that operation. The tool performs the artifact write and returns only a bounded receipt.\nFor generated or combined tables, import emit_table, load_table, and visualize from the snapshot-installed forty_two_artifacts module exactly as described in the AgentSpec artifact workflow. Complete rows must move Daytona-to-Azure through emit_table; only bounded receipts may reach the model. Finalize a table with finalize_table_artifact, call Python visualize with that exact committed artifact id and session_id, then pass its bounded receipt unchanged to finalize_chart_artifact. Never call an MCP tool named visualize.\n</session_context>`;
+  const artifactPresentationContext = `<artifact_presentation>\nA table created only to supply data to a chart is an internal dependency. When the user requests a chart, reference only the committed chart artifact in the final answer. Do not reference, describe, or present its source table unless the user explicitly asks to see or download that table.\n</artifact_presentation>`;
+  const sessionContext = `<session_context>\nThe public Forty Two application session ID is ${applicationSessionId}. Pass this exact non-secret sessionId unchanged to every ${SHARED_DATA_SOURCE_MCP_NAME} datasource, file, database, SQL, table-artifact, and chart-artifact tool, to emit_table/load_table/visualize in Daytona, and to the forty-two-todo plan tool. Never substitute the TrueForge runtime ID.\nOnly these immutable datasource bindings are available:\n${sourceContext}\nFor every datasource-specific tool, also pass the exact bound dataSourceId shown above. For every file, call get_file_download_url on ${SHARED_DATA_SOURCE_MCP_NAME} from Daytona Code Mode, download Azure directly with the returned If-Match header, and verify both ETag and byte size before reading it. File bytes must never enter a TrueForge message or transit the Forty Two web server. run_read_query is side-effect-free.\n${artifactWorkflowInstructions()}\n</session_context>`;
   const productServers = (agent.manifest.mcpServers ?? []).filter((server) =>
     [SHARED_DATA_SOURCE_MCP_NAME, "forty-two-todo"].includes(server.name),
   );
@@ -446,9 +487,16 @@ async function productAgentManifest(
   }
   return {
     ...agent.manifest,
-    instructions: `${agent.manifest.instructions ?? ""}\n\n${sessionContext}`,
+    instructions: `${agent.manifest.instructions ?? ""}\n\n${artifactPresentationContext}\n\n${sessionContext}`,
     mcpServers: productServers,
   };
+}
+
+export function artifactWorkflowInstructions(): string {
+  return `Use exactly one of these table-artifact paths; never mix them:
+1. Database-query path: create_query_table_artifact performs the query, writes the artifact, commits its metadata, and returns a bounded receipt. Its artifact.artifactId is already the final committed table id. NEVER call finalize_table_artifact for an artifact returned by create_query_table_artifact. Use that committed id directly with Python visualize.
+2. Daytona-generated path: for file-derived, transformed, or combined rows, import emit_table, load_table, and visualize from the snapshot-installed forty_two_artifacts module. Complete rows move Daytona-to-Azure through emit_table; only its bounded receipt may reach the model. Call finalize_table_artifact exactly once for that emit_table receipt. The returned artifact id is the committed table id to pass to Python visualize.
+For either path, pass the bounded visualize receipt unchanged to finalize_chart_artifact. Never call an MCP tool named visualize. For each genuinely new create_query_table_artifact operation, generate a new UUID requestId. Retry the same requestId only when the result is ambiguous; an explicit error is not ambiguous and must not be retried blindly with a new identity.`;
 }
 
 async function requiredJsonBody(
@@ -561,7 +609,7 @@ function maximumSessionDataSources(): number {
 function capabilityTtlSeconds(): number {
   return boundedIntegerEnvironment(
     "MCP_CAPABILITY_TTL_SECONDS",
-    3_600,
+    86_400,
     300,
     86_400,
   );

@@ -59,9 +59,14 @@ export const ChartConfigPropsSchema = z.object({
   ...MetricChartPropsSchema.shape,
 });
 
-export const DEFAULT_CHART_CONFIG: Partial<ChartConfigProps> = getDefaults(
+/**
+ * Every chart option except the discriminator has a schema default. Keeping
+ * that fact in the type prevents renderer call sites from treating governed
+ * defaults as possibly missing while leaving selectedChartType explicit.
+ */
+export const DEFAULT_CHART_CONFIG = getDefaults(
   ChartConfigPropsSchema,
-);
+) as Omit<ChartConfigProps, "selectedChartType">;
 
 export const DEFAULT_CHART_CONFIG_ENTRIES =
   Object.entries(DEFAULT_CHART_CONFIG);

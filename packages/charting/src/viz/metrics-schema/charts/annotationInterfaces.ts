@@ -53,8 +53,9 @@ export const TrendlineSchema = z.object({
   id: z.string(),
 });
 
-export const DEFAULT_TRENDLINE_CONFIG: Partial<Trendline> =
-  getDefaults(TrendlineSchema);
+export const DEFAULT_TRENDLINE_CONFIG = getDefaults(
+  TrendlineSchema,
+) as Omit<Trendline, "columnId" | "id">;
 
 // Export inferred types
 export type GoalLine = z.infer<typeof GoalLineSchema>;

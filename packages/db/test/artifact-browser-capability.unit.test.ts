@@ -76,4 +76,21 @@ test("browser capabilities reject tampering and expiry", () => {
     }),
     null,
   );
+  assert.ok(
+    verifyArtifactBrowserCapability({
+      token,
+      signingKey,
+      now: new Date("2026-08-28T01:05:00.000Z"),
+      allowExpiredForSeconds: 301,
+    }),
+  );
+  assert.equal(
+    verifyArtifactBrowserCapability({
+      token,
+      signingKey,
+      now: new Date("2026-08-28T01:05:01.000Z"),
+      allowExpiredForSeconds: 301,
+    }),
+    null,
+  );
 });

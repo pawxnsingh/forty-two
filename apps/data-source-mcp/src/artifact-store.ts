@@ -582,6 +582,21 @@ export class ArtifactStore {
     now?: Date;
   }) {
     const request = FinalizeTableArtifactInputSchema.parse(input.request);
+    const existing = await this.repositories.getAnalysisArtifact({
+      chatSessionId: input.chatSessionId,
+      artifactId: request.artifactId,
+    });
+    if (
+      existing?.kind === "table" &&
+      existing.provenance.tool === "create_query_table_artifact"
+    ) {
+      if (existing.contentSha256 !== request.contentSha256) {
+        throw new Error(
+          "Artifact retry conflicts with the committed query artifact.",
+        );
+      }
+      return receipt(existing);
+    }
     const expectedId = artifactIdFor({
       chatSessionId: input.chatSessionId,
       contentSha256: request.contentSha256,
@@ -590,10 +605,6 @@ export class ArtifactStore {
     if (request.artifactId !== expectedId) {
       throw new Error("Artifact id does not match its content identity.");
     }
-    const existing = await this.repositories.getAnalysisArtifact({
-      chatSessionId: input.chatSessionId,
-      artifactId: request.artifactId,
-    });
     if (existing) {
       const existingParents =
         await this.repositories.listAnalysisArtifactParents({
