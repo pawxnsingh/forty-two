@@ -1,0 +1,234 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { describe, it } from "node:test";
+
+import {
+  ChartArtifactEnvelopeV1Schema,
+  CHART_CONFIG_V1_FIELDS,
+  CHART_TYPES_V1,
+  ChartConfigV1Schema,
+  validateChartConfigV1,
+} from "../src/server/artifact-contracts.js";
+import { ChartConfigPropsSchema } from "../src/viz/metrics-schema/charts/chartConfigProps.js";
+import {
+  ChartTypePlottableSchema,
+  ChartTypeSchema,
+} from "../src/viz/metrics-schema/charts/enum.js";
+
+const fixture = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/chart-config-v1.json", import.meta.url),
+    "utf8",
+  ),
+) as {
+  supportedRendererTypes: string[];
+  plottableRendererTypes: string[];
+  unsupportedRendererTypes: string[];
+  rootFields: string[];
+  columns: {
+    name: string;
+    type:
+      | "string"
+      | "number"
+      | "integer"
+      | "decimal"
+      | "boolean"
+      | "datetime"
+      | "json";
+    nullable: boolean;
+    encoding?: "json" | "string";
+  }[];
+  validCases: { name: string; config: unknown }[];
+  invalidCases: { name: string; config: unknown }[];
+};
+
+const columns = [
+  { name: "Sales", type: "number" as const, nullable: false },
+  { name: "Profit", type: "number" as const, nullable: false },
+  { name: "Region", type: "string" as const, nullable: false },
+];
+
+describe("chart.v1 server contracts", () => {
+  it("accepts a strict scatter config with numeric axes", () => {
+    const config = validateChartConfigV1({
+      columns,
+      rowCount: 2,
+      config: {
+        selectedChartType: "scatter",
+        scatterAxis: {
+          x: ["Sales"],
+          y: ["Profit"],
+          category: ["Region"],
+          size: [],
+          tooltip: null,
+        },
+      },
+    });
+    assert.equal(config.selectedChartType, "scatter");
+  });
+
+  it("keeps every renderer field in the versioned server contract", () => {
+    assert.deepEqual(CHART_CONFIG_V1_FIELDS, fixture.rootFields);
+    const rendererConfig = ChartConfigPropsSchema.parse({
+      selectedChartType: "scatter",
+      scatterAxis: { x: ["Sales"], y: ["Profit"] },
+    });
+    assert.deepEqual(Object.keys(rendererConfig), fixture.rootFields);
+    assert.equal(
+      validateChartConfigV1({
+        columns,
+        rowCount: 2,
+        config: rendererConfig,
+      }).selectedChartType,
+      "scatter",
+    );
+  });
+
+  it("fails closed for every unsupported chart type", () => {
+    assert.deepEqual(
+      ChartTypeSchema.unwrap().options,
+      fixture.supportedRendererTypes,
+    );
+    assert.deepEqual(CHART_TYPES_V1, fixture.supportedRendererTypes);
+    assert.deepEqual(
+      ChartTypePlottableSchema.options,
+      fixture.plottableRendererTypes,
+    );
+    for (const selectedChartType of fixture.unsupportedRendererTypes) {
+      assert.equal(
+        ChartTypeSchema.safeParse(selectedChartType).success,
+        false,
+        selectedChartType,
+      );
+      assert.equal(
+        ChartConfigPropsSchema.safeParse({ selectedChartType }).success,
+        false,
+        selectedChartType,
+      );
+      assert.equal(
+        ChartConfigV1Schema.safeParse({ selectedChartType }).success,
+        false,
+        selectedChartType,
+      );
+    }
+  });
+
+  it("accepts the shared functional fixture matrix for every chart type", () => {
+    assert.deepEqual(
+      new Set(
+        fixture.validCases.flatMap((testCase) =>
+          Object.keys(testCase.config as object),
+        ),
+      ),
+      new Set(fixture.rootFields),
+    );
+    for (const testCase of fixture.validCases) {
+      const config = validateChartConfigV1({
+        columns: fixture.columns,
+        rowCount: 12,
+        config: testCase.config,
+      });
+      assert.equal(
+        config.selectedChartType,
+        (testCase.config as { selectedChartType: string }).selectedChartType,
+        testCase.name,
+      );
+    }
+  });
+
+  it("rejects every shared invalid column and strictness fixture", () => {
+    for (const testCase of fixture.invalidCases) {
+      assert.throws(
+        () =>
+          validateChartConfigV1({
+            columns: fixture.columns,
+            rowCount: 12,
+            config: testCase.config,
+          }),
+        undefined,
+        testCase.name,
+      );
+    }
+  });
+
+  it("rejects unknown keys, missing columns, nonnumeric axes, and oversized data", () => {
+    assert.equal(
+      ChartConfigV1Schema.safeParse({
+        selectedChartType: "scatter",
+        scatterAxis: { x: ["Sales"], y: ["Profit"] },
+        rows: [{ Sales: 1, Profit: 2 }],
+      }).success,
+      false,
+    );
+    assert.throws(
+      () =>
+        validateChartConfigV1({
+          columns,
+          rowCount: 1,
+          config: {
+            selectedChartType: "scatter",
+            scatterAxis: { x: ["Missing"], y: ["Profit"] },
+          },
+        }),
+      /does not exist/,
+    );
+    assert.throws(
+      () =>
+        validateChartConfigV1({
+          columns,
+          rowCount: 1,
+          config: {
+            selectedChartType: "scatter",
+            scatterAxis: { x: ["Region"], y: ["Profit"] },
+          },
+        }),
+      /must be numeric/,
+    );
+    assert.throws(
+      () =>
+        validateChartConfigV1({
+          columns,
+          rowCount: 5_001,
+          config: {
+            selectedChartType: "scatter",
+            scatterAxis: { x: ["Sales"], y: ["Profit"] },
+          },
+        }),
+      /5,000/,
+    );
+  });
+
+  it("validates a complete envelope and rejects row-count drift", () => {
+    const envelope = {
+      schemaVersion: "chart.v1",
+      id: "art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      sourceArtifactId: "art_01ARZ3NDEKTSV4RRFFQ69G5FAA",
+      sourceContentSha256: "a".repeat(64),
+      title: "Sales vs profit",
+      description: null,
+      config: {
+        selectedChartType: "scatter",
+        scatterAxis: { x: ["Sales"], y: ["Profit"] },
+        trendlines: [{ columnId: "Profit", id: "trend-1" }],
+        columnLabelFormats: {
+          Profit: {
+            columnType: "number",
+            style: "currency",
+            currency: "USD",
+          },
+        },
+      },
+      columns,
+      rowCount: 1,
+      sourceLimited: false,
+      data: [{ Sales: 10, Profit: 2 }],
+      createdAt: new Date().toISOString(),
+    };
+    assert.equal(ChartArtifactEnvelopeV1Schema.parse(envelope).rowCount, 1);
+    assert.equal(
+      ChartArtifactEnvelopeV1Schema.safeParse({ ...envelope, data: [] })
+        .success,
+      false,
+    );
+  });
+});
