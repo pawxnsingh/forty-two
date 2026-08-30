@@ -373,6 +373,11 @@ describe("chart.v1 server contracts", () => {
 
   it("extracts declared defaults without pretending required fields exist", () => {
     assert.equal(DEFAULT_CHART_CONFIG.selectedChartType, "table");
+    assert.equal(DEFAULT_CHART_CONFIG.gridLines, false);
+    assert.equal(
+      ChartConfigPropsSchema.parse({ selectedChartType: "line" }).gridLines,
+      false,
+    );
     assert.equal(DEFAULT_TRENDLINE_CONFIG.type, "linear_regression");
     assert.equal("columnId" in DEFAULT_TRENDLINE_CONFIG, false);
     assert.equal("id" in DEFAULT_TRENDLINE_CONFIG, false);

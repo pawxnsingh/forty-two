@@ -88,6 +88,16 @@ describe("canonical table.v1", () => {
         /safe|unsafe/,
       );
     }
+    for (const value of [new Map([["a", 1]]), new Set([1]), /value/]) {
+      assert.throws(
+        () =>
+          serializeCanonicalTableV1({
+            columns: [{ name: "x", type: "json", nullable: false }],
+            rows: [{ x: value }],
+          }),
+        /non-JSON object/,
+      );
+    }
     assert.throws(
       () => parseCanonicalTableV1(Buffer.alloc(MAX_ARTIFACT_BYTES + 1)),
       /5 MiB/,

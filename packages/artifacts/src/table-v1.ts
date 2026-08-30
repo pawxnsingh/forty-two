@@ -149,6 +149,10 @@ function canonicalJsonValue(value: unknown, path: string): unknown {
     );
   }
   if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${path} contains a non-JSON object.`);
+    }
     const record = value as Record<string, unknown>;
     return Object.fromEntries(
       Object.keys(record)

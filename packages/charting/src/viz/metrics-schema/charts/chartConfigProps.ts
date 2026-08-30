@@ -34,7 +34,7 @@ export const ChartConfigPropsSchema = z.object({
   // OPTIONAL: default is null and will be true if there are multiple Y axes or if a category axis is used
   showLegend: z.nullable(z.boolean()).default(null),
   // OPTIONAL: default is false
-  gridLines: z.boolean().default(true),
+  gridLines: z.boolean().default(false),
   // Bar/line/combo: resolve clicks via index mode (forgiving plot-area clicks).
   categoryChartClickIndexMode: z.boolean().default(false),
   // OPTIONAL
