@@ -35,37 +35,17 @@ bounded by `SHUTDOWN_TIMEOUT_MS` (15 seconds by default, 20 seconds maximum).
 The Compose grace period is 25 seconds, leaving at least five seconds for
 process and container cleanup.
 
-## Local connection configuration
+## Connection configuration
 
-For local development, `DATA_SOURCE_CONNECTIONS_JSON` contains an array of
-connection definitions:
+The product server requires `MCP_CONTROL_DATABASE_URL` and
+`DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY`. Product sessions resolve ready,
+encrypted datasource records dynamically by their exact persisted `ds_`
+identifier. Register local and deployed databases through the server-side
+datasource API before binding them to a chat session.
 
-```json
-[
-  {
-    "name": "analytics",
-    "description": "Read-only analytics warehouse",
-    "type": "postgres",
-    "credentials": {
-      "type": "postgres",
-      "host": "postgres",
-      "port": 5432,
-      "default_database": "forty_two",
-      "username": "forty_two_reader",
-      "password": "replace-me",
-      "ssl": false
-    },
-    "policy": {
-      "maxRows": 1000,
-      "queryTimeoutMs": 60000
-    }
-  }
-]
-```
-
-Production sessions resolve encrypted datasource records dynamically.
-The environment provider remains only for isolated adapter development and
-must not be attached to a public or named product agent.
+Static `ConnectionRegistry` inputs exist only for isolated adapter tests. The
+product entry point does not load connection aliases or credentials from the
+environment because an alias cannot satisfy a persisted session binding.
 
 Use database roles that are read-only and restricted to the intended schemas.
 SQL parsing is defense in depth; it does not replace database permissions.

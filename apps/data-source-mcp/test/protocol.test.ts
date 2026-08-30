@@ -431,7 +431,7 @@ test("internal validation is bearer-only and sanitizes adapter failures", async 
   assert.equal(invalidated, dataSourceId);
 });
 
-test("explicit sessions scope every MCP tool, file SAS, and revocation", async (context) => {
+test("persisted ds_ bindings scope every MCP tool, file SAS, and revocation", async (context) => {
   const firstDatabaseId = "ds_01HZX000000000000000000001";
   const secondDatabaseId = "ds_01HZX000000000000000000002";
   const fileId = "ds_01HZX000000000000000000003";
@@ -530,12 +530,26 @@ test("explicit sessions scope every MCP tool, file SAS, and revocation", async (
     [firstDatabaseId],
   );
 
+  const allowed = await client.callTool({
+    name: "run_read_query",
+    arguments: {
+      sessionId,
+      dataSourceId: firstDatabaseId,
+      sql: "SELECT 1",
+    },
+  });
+  assert.equal(allowed.isError, undefined);
+  assert.deepEqual(allowed.structuredContent?.rows, [
+    { data_source: firstDatabaseId },
+  ]);
+  assert.equal(executionCalls, 1);
+
   const denied = await client.callTool({
     name: "run_read_query",
     arguments: { sessionId, dataSourceId: secondDatabaseId, sql: "SELECT 1" },
   });
   assert.equal(denied.isError, true);
-  assert.equal(executionCalls, 0);
+  assert.equal(executionCalls, 1);
 
   const descriptor = await client.callTool({
     name: "get_file_download_url",
