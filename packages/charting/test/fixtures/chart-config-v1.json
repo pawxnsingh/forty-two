@@ -1,0 +1,423 @@
+{
+  "schemaVersion": "chart.v1",
+  "supportedRendererTypes": [
+    "line",
+    "bar",
+    "scatter",
+    "pie",
+    "metric",
+    "table",
+    "combo"
+  ],
+  "plottableRendererTypes": ["line", "bar", "scatter", "pie", "combo"],
+  "unsupportedRendererTypes": [
+    "heatmap",
+    "radar",
+    "polarArea",
+    "treemap",
+    "choropleth",
+    "bubbleMap",
+    "funnel",
+    "gauge",
+    "decomposition"
+  ],
+  "rootFields": [
+    "selectedChartType",
+    "columnSettings",
+    "columnLabelFormats",
+    "colors",
+    "showLegend",
+    "gridLines",
+    "categoryChartClickIndexMode",
+    "showLegendHeadline",
+    "goalLines",
+    "trendlines",
+    "disableTooltip",
+    "yAxisShowAxisLabel",
+    "yAxisShowAxisTitle",
+    "yAxisAxisTitle",
+    "yAxisStartAxisAtZero",
+    "yAxisScaleType",
+    "xAxisTimeInterval",
+    "xAxisShowAxisLabel",
+    "xAxisShowAxisTitle",
+    "xAxisAxisTitle",
+    "xAxisLabelRotation",
+    "xAxisDataZoom",
+    "xAxisLabelMaxChars",
+    "categoryAxisTitle",
+    "y2AxisShowAxisLabel",
+    "y2AxisShowAxisTitle",
+    "y2AxisAxisTitle",
+    "y2AxisStartAxisAtZero",
+    "y2AxisScaleType",
+    "y2AxisClampToMetadata",
+    "y2AxisUseFixedStepGrid",
+    "y2AxisFixedStepSize",
+    "barAndLineAxis",
+    "barLayout",
+    "barSortBy",
+    "barGroupType",
+    "barShowTotalAtTop",
+    "lineGroupType",
+    "scatterAxis",
+    "scatterDotSize",
+    "pieSortBy",
+    "pieChartAxis",
+    "pieDisplayLabelAs",
+    "pieShowInnerLabel",
+    "pieInnerLabelAggregate",
+    "pieInnerLabelTitle",
+    "pieLabelPosition",
+    "pieDonutWidth",
+    "pieMinimumSlicePercentage",
+    "tableColumnOrder",
+    "tableColumnWidths",
+    "tableHeaderBackgroundColor",
+    "tableHeaderFontColor",
+    "tableColumnFontColor",
+    "comboChartAxis",
+    "metricColumnId",
+    "metricValueAggregate",
+    "metricHeader",
+    "metricSubHeader",
+    "metricValueLabel",
+    "metricTrendColumnId"
+  ],
+  "promptFields": [
+    "barAndLineAxis",
+    "scatterAxis",
+    "pieChartAxis",
+    "comboChartAxis",
+    "metricColumnId",
+    "tableColumnOrder",
+    "columnSettings",
+    "columnLabelFormats",
+    "goalLines",
+    "trendlines",
+    "xAxisTimeInterval"
+  ],
+  "columns": [
+    { "name": "Month", "type": "datetime", "nullable": false },
+    { "name": "Sales", "type": "number", "nullable": false },
+    { "name": "Profit", "type": "number", "nullable": false },
+    { "name": "Target", "type": "number", "nullable": false },
+    { "name": "Spend", "type": "number", "nullable": false },
+    { "name": "Revenue", "type": "number", "nullable": false },
+    { "name": "Units", "type": "integer", "nullable": false },
+    { "name": "Region", "type": "string", "nullable": false },
+    { "name": "Channel", "type": "string", "nullable": false },
+    { "name": "Identifier", "type": "string", "nullable": false }
+  ],
+  "validCases": [
+    {
+      "name": "bar-rich",
+      "config": {
+        "selectedChartType": "bar",
+        "barAndLineAxis": {
+          "x": ["Region"],
+          "y": ["Sales"],
+          "category": ["Channel"],
+          "colorBy": [],
+          "tooltip": ["Profit"]
+        },
+        "columnSettings": {
+          "Sales": {
+            "showDataLabels": true,
+            "columnVisualization": "bar",
+            "conditionalColors": [
+              { "operator": "gte", "value": 1000, "color": "#16a34a" }
+            ]
+          }
+        },
+        "columnLabelFormats": {
+          "Sales": {
+            "columnType": "number",
+            "style": "currency",
+            "currency": "USD",
+            "maximumFractionDigits": 0
+          }
+        },
+        "colors": ["#2563eb", "#16a34a"],
+        "showLegend": true,
+        "gridLines": true,
+        "categoryChartClickIndexMode": true,
+        "showLegendHeadline": "total",
+        "goalLines": [
+          { "show": true, "value": 1000, "goalLineLabel": "Target" }
+        ],
+        "disableTooltip": false,
+        "yAxisShowAxisLabel": true,
+        "yAxisShowAxisTitle": true,
+        "yAxisAxisTitle": "Sales",
+        "yAxisStartAxisAtZero": true,
+        "yAxisScaleType": "linear",
+        "xAxisShowAxisLabel": true,
+        "xAxisShowAxisTitle": true,
+        "xAxisAxisTitle": "Region",
+        "xAxisLabelRotation": 45,
+        "xAxisDataZoom": false,
+        "xAxisLabelMaxChars": 24,
+        "categoryAxisTitle": "Channel",
+        "barLayout": "vertical",
+        "barSortBy": ["desc"],
+        "barGroupType": "group",
+        "barShowTotalAtTop": false
+      }
+    },
+    {
+      "name": "line-temporal-trend",
+      "config": {
+        "selectedChartType": "line",
+        "barAndLineAxis": {
+          "x": ["Month"],
+          "y": ["Revenue"],
+          "category": ["Region"]
+        },
+        "xAxisTimeInterval": "month",
+        "lineGroupType": null,
+        "trendlines": [
+          {
+            "columnId": "Revenue",
+            "id": "revenue-trend",
+            "type": "linear_regression",
+            "show": true
+          }
+        ],
+        "columnLabelFormats": {
+          "Month": {
+            "columnType": "date",
+            "style": "date",
+            "dateFormat": "MMM YYYY"
+          },
+          "Revenue": {
+            "columnType": "number",
+            "style": "currency",
+            "currency": "USD"
+          }
+        }
+      }
+    },
+    {
+      "name": "scatter-raw-observations",
+      "config": {
+        "selectedChartType": "scatter",
+        "scatterAxis": {
+          "x": ["Spend"],
+          "y": ["Revenue"],
+          "category": ["Channel"],
+          "size": ["Units"],
+          "tooltip": ["Identifier"]
+        },
+        "scatterDotSize": [4, 18],
+        "trendlines": [{ "columnId": "Revenue", "id": "trend-1" }],
+        "columnLabelFormats": {
+          "Revenue": {
+            "columnType": "number",
+            "style": "currency",
+            "currency": "USD"
+          }
+        }
+      }
+    },
+    {
+      "name": "pie-share",
+      "config": {
+        "selectedChartType": "pie",
+        "pieChartAxis": {
+          "x": ["Region"],
+          "y": ["Sales"],
+          "tooltip": ["Units"]
+        },
+        "pieSortBy": "value",
+        "pieDisplayLabelAs": "percent",
+        "pieShowInnerLabel": true,
+        "pieInnerLabelAggregate": "sum",
+        "pieInnerLabelTitle": "Total sales",
+        "pieLabelPosition": "outside",
+        "pieDonutWidth": 40,
+        "pieMinimumSlicePercentage": 2.5
+      }
+    },
+    {
+      "name": "combo-two-axes",
+      "config": {
+        "selectedChartType": "combo",
+        "comboChartAxis": {
+          "x": ["Month"],
+          "y": ["Revenue"],
+          "y2": ["Profit"],
+          "category": [],
+          "colorBy": []
+        },
+        "xAxisTimeInterval": "month",
+        "y2AxisShowAxisLabel": true,
+        "y2AxisShowAxisTitle": true,
+        "y2AxisAxisTitle": "Profit",
+        "y2AxisStartAxisAtZero": true,
+        "y2AxisScaleType": "linear",
+        "y2AxisClampToMetadata": false,
+        "y2AxisUseFixedStepGrid": true,
+        "y2AxisFixedStepSize": 5
+      }
+    },
+    {
+      "name": "metric-trend",
+      "config": {
+        "selectedChartType": "metric",
+        "metricColumnId": "Revenue",
+        "metricValueAggregate": "sum",
+        "metricHeader": {
+          "columnId": "Region",
+          "useValue": false,
+          "aggregate": "first"
+        },
+        "metricSubHeader": "Revenue this period",
+        "metricValueLabel": null,
+        "metricTrendColumnId": "Month",
+        "columnLabelFormats": {
+          "Revenue": {
+            "columnType": "number",
+            "style": "currency",
+            "currency": "USD"
+          }
+        }
+      }
+    },
+    {
+      "name": "table-renderer-fields",
+      "config": {
+        "selectedChartType": "table",
+        "tableColumnOrder": ["Identifier", "Region", "Sales", "Profit"],
+        "tableColumnWidths": { "Identifier": 180, "Region": 140, "Sales": 120 },
+        "tableHeaderBackgroundColor": "#111827",
+        "tableHeaderFontColor": "#ffffff",
+        "tableColumnFontColor": "#111827"
+      }
+    }
+  ],
+  "invalidCases": [
+    {
+      "name": "renderer-missing-heatmap",
+      "config": {
+        "selectedChartType": "heatmap",
+        "heatmapAxis": {
+          "x": ["Month"],
+          "y": ["Region"],
+          "value": ["Revenue"]
+        }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-radar",
+      "config": {
+        "selectedChartType": "radar",
+        "barAndLineAxis": { "x": ["Region"], "y": ["Sales", "Profit"] }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-polar-area",
+      "config": {
+        "selectedChartType": "polarArea",
+        "pieChartAxis": { "x": ["Region"], "y": ["Sales"] }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-treemap",
+      "config": {
+        "selectedChartType": "treemap",
+        "pieChartAxis": { "x": ["Region"], "y": ["Sales"] }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-choropleth",
+      "config": {
+        "selectedChartType": "choropleth",
+        "pieChartAxis": { "x": ["Region"], "y": ["Sales"] },
+        "geoConfig": { "level": "us-states" }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-bubble-map",
+      "config": {
+        "selectedChartType": "bubbleMap",
+        "scatterAxis": {
+          "x": ["Spend"],
+          "y": ["Revenue"],
+          "size": ["Units"]
+        },
+        "geoConfig": { "level": "us-states" }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-funnel",
+      "config": {
+        "selectedChartType": "funnel",
+        "pieChartAxis": { "x": ["Region"], "y": ["Sales"] }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-gauge",
+      "config": {
+        "selectedChartType": "gauge",
+        "pieChartAxis": { "x": ["Region"], "y": ["Sales"] }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "renderer-missing-decomposition",
+      "config": {
+        "selectedChartType": "decomposition",
+        "barAndLineAxis": {
+          "x": ["Region"],
+          "y": ["Sales", "Profit"]
+        }
+      },
+      "error": "selectedChartType is invalid"
+    },
+    {
+      "name": "unknown-format-column",
+      "config": {
+        "selectedChartType": "scatter",
+        "scatterAxis": { "x": ["Spend"], "y": ["Revenue"] },
+        "columnLabelFormats": {
+          "Missing": { "columnType": "number", "style": "currency" }
+        }
+      },
+      "error": "does not exist"
+    },
+    {
+      "name": "trendline-nonnumeric",
+      "config": {
+        "selectedChartType": "line",
+        "barAndLineAxis": { "x": ["Month"], "y": ["Revenue"] },
+        "trendlines": [{ "columnId": "Region", "id": "bad" }]
+      },
+      "error": "must be numeric"
+    },
+    {
+      "name": "table-order-missing-column",
+      "config": {
+        "selectedChartType": "table",
+        "tableColumnOrder": ["Missing"]
+      },
+      "error": "does not exist"
+    },
+    {
+      "name": "unknown-nested-setting",
+      "config": {
+        "selectedChartType": "bar",
+        "barAndLineAxis": { "x": ["Region"], "y": ["Sales"] },
+        "columnSettings": { "Sales": { "prototypePollution": true } }
+      },
+      "error": "invalid"
+    }
+  ]
+}

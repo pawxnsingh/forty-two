@@ -1,0 +1,33 @@
+{
+  "chatSessionId": "sess_01HZX000000000000000000001",
+  "source": {
+    "id": "art_01HZX000000000000000000001",
+    "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rowCount": 2,
+    "columns": [
+      { "name": "Sales", "type": "number", "nullable": false },
+      { "name": "Profit", "type": "number", "nullable": false },
+      { "name": "AverageSales", "type": "number", "nullable": false }
+    ]
+  },
+  "request": {
+    "schemaVersion": "chart.receipt.v1",
+    "inputArtifactId": "art_01HZX000000000000000000001",
+    "sourceContentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rowCount": 2,
+    "title": "Sales vs profit",
+    "description": "Every source row",
+    "config": {
+      "selectedChartType": "scatter",
+      "scatterAxis": {
+        "x": ["Sales"],
+        "y": ["Profit"],
+        "category": [],
+        "size": [],
+        "tooltip": ["AverageSales"]
+      }
+    },
+    "warnings": [],
+    "receiptSha256": "f68b1726dc3f038b4dad5d4561f6917bc69c06e76032e70b4eaf5042b47bef5b"
+  }
+}
