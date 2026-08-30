@@ -1,5 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 
+import {
+  getActiveChatSessionScope,
+  type ActiveChatSessionScope,
+} from "@forty-two/db";
+
 import express, {
   type Express,
   type NextFunction,
@@ -12,10 +17,23 @@ import type { ServerConfig } from "./config.js";
 import type { ConnectionRegistry } from "./connection-registry.js";
 import { createDataSourceMcpServer } from "./mcp-server.js";
 import { QueryExecutionLedger } from "./query-execution-ledger.js";
+import { createFileDownloadDescriptor } from "./file-download.js";
+import { ArtifactStore } from "./artifact-store.js";
 
 interface ClosableSession {
   close(): Promise<void>;
 }
+
+export interface HttpAppDependencies {
+  authorizeSession(input: {
+    chatSessionId: string;
+  }): Promise<ActiveChatSessionScope | null>;
+  artifactStore?: ArtifactStore;
+}
+
+const defaultDependencies: HttpAppDependencies = {
+  authorizeSession: getActiveChatSessionScope,
+};
 
 export class HttpRequestLifecycle {
   private readonly sessions = new Set<ClosableSession>();
@@ -81,9 +99,15 @@ export function createHttpApp(
   config: ServerConfig,
   registry: ConnectionRegistry,
   lifecycle = new HttpRequestLifecycle(),
+  dependencies: HttpAppDependencies = defaultDependencies,
 ): Express {
   const app = express();
   const queryLedger = new QueryExecutionLedger();
+  const artifactStore =
+    dependencies.artifactStore ??
+    (config.fileDownloads && config.dynamic
+      ? new ArtifactStore(config.fileDownloads)
+      : undefined);
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
 
@@ -103,6 +127,28 @@ export function createHttpApp(
         return;
       }
       response.json({ data: record });
+    },
+  );
+
+  app.post(
+    "/internal/artifacts/cleanup",
+    rejectWhileDraining(lifecycle),
+    requireBearerToken(config.authToken),
+    async (_request, response) => {
+      if (!artifactStore) {
+        response
+          .status(503)
+          .json({ error: "Artifact storage is not configured" });
+        return;
+      }
+      await lifecycle.track(async () => {
+        const limit = 100;
+        const retained = await artifactStore.cleanupRetainedArtifacts(limit);
+        const orphans = await artifactStore.cleanupOrphanUploads({
+          limit,
+        });
+        response.json({ data: { retained, orphans } });
+      });
     },
   );
 
@@ -136,7 +182,19 @@ export function createHttpApp(
   app.use("/mcp", requireBearerToken(config.authToken));
   app.post("/mcp", async (request, response) => {
     await lifecycle.track(async () => {
-      const server = createDataSourceMcpServer(registry, queryLedger);
+      const server = createDataSourceMcpServer(registry, queryLedger, {
+        authorizeSession: dependencies.authorizeSession,
+        ...(config.fileDownloads
+          ? {
+              createFileDownloadDescriptor: (source) =>
+                createFileDownloadDescriptor({
+                  config: config.fileDownloads!,
+                  source,
+                }),
+            }
+          : {}),
+        ...(artifactStore ? { artifactStore } : {}),
+      });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

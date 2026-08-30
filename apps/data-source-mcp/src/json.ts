@@ -23,10 +23,21 @@ export function toolSuccess(data: unknown) {
 }
 
 export function toolFailure(error: unknown) {
-  const message =
-    error instanceof Error ? error.message : "Unexpected data-source error";
+  const message = safeToolErrorMessage(error);
   return {
     content: [{ type: "text" as const, text: message }],
     isError: true,
   };
+}
+
+function safeToolErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return "Data source operation failed.";
+  if (
+    /^(Query type |Only read-only queries are allowed|SELECT statements with INTO|Locking SELECT statements|Data source '[^']+' is not available$)/.test(
+      error.message,
+    )
+  ) {
+    return error.message;
+  }
+  return "Data source operation failed.";
 }

@@ -15,7 +15,8 @@ docker build -f "$repo_root/apps/data-source-mcp/Dockerfile" \
   -t "$image_tag" "$repo_root" >/dev/null
 docker run -d --name "$container_name" \
   -e MCP_AUTH_TOKEN=image-test-token \
-  -e DATA_SOURCE_CONNECTIONS_JSON=[] \
+  -e MCP_CONTROL_DATABASE_URL=postgresql://control:secret@127.0.0.1/control \
+  -e DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY=0707070707070707070707070707070707070707070707070707070707070707 \
   "$image_tag" >/dev/null
 
 for _ in $(seq 1 30); do

@@ -41,20 +41,10 @@ updates the named `forty-two-data-agent` from
 ignored `.env` file and TrueForge's settings database; the agent spec contains
 only resource references and no secrets.
 
-After the stack is healthy, run the live integration check:
-
-```sh
-pnpm test:platform-integration
-```
-
-This creates a TrueForge test session that runs Code Mode in Daytona and
-queries the automatically provisioned `local-postgres` source through the
-authenticated datasource MCP bridge and its dedicated read-only database role.
-The test rejects direct datasource tool calls and compares the actual Code Mode
-exec result and final nonce with short-lived, authenticated server-side MCP
-execution telemetry. It then cancels any running turn and independently cleans
-up its TrueForge session and Daytona sandbox. Cleanup walks every event page and
-retains the TrueForge session when sandbox disposition cannot be established.
+Datasource connections are registered through the server-side datasource API
+and persisted under public `ds_` identifiers before they can be bound to a chat
+session. The authenticated MCP bridge resolves only those exact, ready session
+bindings; Compose does not inject an unscoped static datasource alias.
 
 The Next.js backend is a server-side gateway built with the published
 `@truefoundry/trueforge-sdk`. The frontend can create a session, submit JSON

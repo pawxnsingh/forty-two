@@ -20,6 +20,12 @@ importers:
 
   apps/data-source-mcp:
     dependencies:
+      '@azure/storage-blob':
+        specifier: ^12.28.0
+        version: 12.33.0
+      '@forty-two/artifacts':
+        specifier: workspace:*
+        version: link:../../packages/artifacts
       '@forty-two/data-source':
         specifier: workspace:*
         version: link:../../packages/data-source
@@ -29,6 +35,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
+      '@repo/charting':
+        specifier: workspace:*
+        version: link:../../packages/charting
       express:
         specifier: ^5.2.1
         version: 5.2.1
