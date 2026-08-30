@@ -4,6 +4,7 @@ import {
   createApplicationSession,
 } from "../../../../lib/server/chat-backend";
 import { listChatSessions } from "@forty-two/db";
+import { ChatSessionStatusSchema } from "@forty-two/db";
 
 export const runtime = "nodejs";
 
@@ -12,7 +13,17 @@ export async function GET(request: Request): Promise<Response> {
     const search = new URL(request.url).searchParams;
     const limit = parseLimit(search.get("limit"));
     const offset = parsePageToken(search.get("pageToken"));
-    const sessions = await listChatSessions({ limit: limit + 1, offset });
+    const rawStatus = search.get("status");
+    const status =
+      rawStatus === null ? null : ChatSessionStatusSchema.safeParse(rawStatus);
+    if (status && !status.success) {
+      throw new ApiInputError("status is invalid.");
+    }
+    const sessions = await listChatSessions({
+      limit: limit + 1,
+      offset,
+      statuses: status?.success ? [status.data] : undefined,
+    });
     const hasMore = sessions.length > limit;
     return Response.json({
       data: sessions.slice(0, limit).map((session) => ({

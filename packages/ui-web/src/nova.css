@@ -1,0 +1,632 @@
+/*
+ * Adapted from shadcn/ui's Nova component contracts at commit
+ * 9846e22ce52c723554742860a0dbd3e5cf19b573. Original Pictures semantic
+ * roles replace shadcn palette variables. See ../LICENSE.shadcn-ui.
+ */
+
+@reference "tailwindcss";
+@reference "@repo/design-tokens/tailwind.css";
+
+@layer components {
+  .cn-button {
+    @apply min-h-[var(--op-target-minimum)] min-w-[var(--op-target-minimum)] gap-1.5 rounded-control border border-transparent bg-clip-padding px-[var(--op-control-padding-inline)] text-label no-underline transition-[transform,background-color,border-color,color] duration-feedback ease-feedback active:not-aria-[haspopup]:translate-y-px focus-visible:outline focus-visible:outline-[length:var(--op-focus-width)] focus-visible:outline-boundary-focus focus-visible:outline-offset-[var(--op-focus-offset)] data-[disabled]:cursor-not-allowed data-[disabled]:bg-action-disabled data-[disabled]:text-action-disabled-foreground data-[disabled]:opacity-[var(--op-interaction-disabled-opacity)] data-[pending]:cursor-wait data-[pending]:opacity-[var(--op-interaction-disabled-opacity)] motion-reduce:transform-none motion-reduce:transition-none forced-colors:border-[ButtonText] forced-colors:data-[disabled]:border-[GrayText] [&_svg:not([class*='size-'])]:size-4;
+  }
+
+  .cn-button-variant-default {
+    @apply bg-action-primary text-action-primary-foreground data-[hovered]:bg-action-primary-pressed data-[pressed]:bg-action-primary-pressed;
+  }
+
+  .cn-button-variant-outline {
+    @apply border-action-secondary-boundary bg-action-secondary text-action-secondary-foreground data-[hovered]:bg-action-secondary-pressed data-[pressed]:bg-action-secondary-pressed;
+  }
+
+  .cn-button-variant-secondary {
+    @apply border-boundary bg-surface-raised text-foreground data-[hovered]:bg-surface-sunken data-[pressed]:bg-surface-sunken;
+  }
+
+  .cn-button-variant-ghost {
+    @apply bg-transparent text-foreground data-[hovered]:bg-surface-sunken data-[pressed]:bg-surface-sunken;
+  }
+
+  .cn-button-variant-destructive {
+    @apply bg-action-danger text-action-danger-foreground data-[hovered]:bg-action-danger-pressed data-[pressed]:bg-action-danger-pressed;
+  }
+
+  .cn-button-variant-link {
+    @apply min-w-0 bg-transparent px-0 text-link underline-offset-4 data-[hovered]:underline;
+  }
+
+  .cn-button-size-xs,
+  .cn-button-size-sm {
+    @apply px-2 text-body-small;
+  }
+
+  .cn-button-size-default {
+    @apply px-[var(--op-control-padding-inline)];
+  }
+
+  .cn-button-size-lg {
+    @apply min-h-[calc(var(--op-target-minimum)+0.5rem)] px-5;
+  }
+
+  .cn-button-size-icon-xs,
+  .cn-button-size-icon-sm,
+  .cn-button-size-icon,
+  .cn-button-size-icon-lg {
+    @apply size-[var(--op-target-minimum)] p-0;
+  }
+
+  .cn-input {
+    @apply min-h-[var(--op-target-minimum)] rounded-control border border-boundary-strong bg-surface px-3 py-2 text-body text-foreground transition-colors duration-feedback data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[focus-visible]:outline-offset-[var(--op-focus-offset)] data-[invalid]:border-status-danger-boundary data-[disabled]:bg-action-disabled data-[disabled]:text-action-disabled-foreground motion-reduce:transition-none forced-colors:border-[ButtonText];
+  }
+
+  .cn-separator {
+    @apply bg-boundary-subtle;
+  }
+
+  /* Drop zone, radio group and progress bar are Original Pictures components
+     rather than shadcn adaptations: Nova has no contract for them. They are
+     written against the same semantic roles as the rules above, so a console
+     that remaps those roles restyles them without overriding anything here. */
+
+  .cn-drop-zone {
+    @apply flex flex-col items-center justify-center gap-2 rounded-control border border-dashed border-boundary-strong bg-canvas-subtle px-6 py-10 text-center transition-colors duration-feedback ease-feedback data-[hovered]:border-boundary-focus data-[drop-target]:border-boundary-focus data-[drop-target]:bg-surface-sunken data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[focus-visible]:outline-offset-[var(--op-focus-offset)] data-[disabled]:cursor-not-allowed data-[disabled]:opacity-[var(--op-interaction-disabled-opacity)] motion-reduce:transition-none forced-colors:border-[ButtonText];
+  }
+
+  .cn-drop-zone-label {
+    @apply text-body font-medium text-foreground;
+  }
+
+  .cn-drop-zone-description {
+    @apply m-0 text-body-small text-foreground-muted;
+  }
+
+  .cn-radio-group {
+    @apply flex flex-col gap-2;
+  }
+
+  .cn-radio-group-label {
+    @apply text-body font-medium text-foreground;
+  }
+
+  .cn-radio-group-description {
+    @apply text-body-small text-foreground-muted;
+  }
+
+  .cn-radio-group-items {
+    @apply flex flex-col gap-2;
+  }
+
+  .cn-radio {
+    @apply flex cursor-pointer items-start gap-3 rounded-control border border-boundary-subtle bg-surface-raised p-3.5 text-left transition-colors duration-feedback ease-feedback data-[hovered]:border-boundary data-[selected]:border-action-primary data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[focus-visible]:outline-offset-[var(--op-focus-offset)] data-[disabled]:cursor-not-allowed data-[disabled]:opacity-[var(--op-interaction-disabled-opacity)] motion-reduce:transition-none forced-colors:border-[ButtonText] forced-colors:data-[selected]:border-[Highlight];
+  }
+
+  .cn-radio-control {
+    @apply mt-0.5 size-4 shrink-0 rounded-full border-2 border-boundary-strong bg-surface transition-[border-width,border-color] duration-feedback ease-feedback motion-reduce:transition-none;
+  }
+
+  .cn-radio[data-selected] .cn-radio-control {
+    @apply border-[5px] border-action-primary;
+  }
+
+  .cn-radio-content {
+    @apply min-w-0 flex-1;
+  }
+
+  .cn-progress-bar {
+    @apply flex flex-col gap-2;
+  }
+
+  .cn-progress-bar-header {
+    @apply flex items-baseline justify-between gap-3;
+  }
+
+  .cn-progress-bar-label {
+    @apply text-body-small text-foreground-secondary;
+  }
+
+  .cn-progress-bar-value {
+    @apply font-mono text-data text-foreground;
+  }
+
+  .cn-progress-bar-track {
+    @apply h-1.5 w-full overflow-hidden rounded-badge bg-surface-sunken forced-colors:border forced-colors:border-[ButtonText];
+  }
+
+  .cn-progress-bar-fill {
+    @apply h-full rounded-badge bg-action-primary transition-[width] duration-feedback ease-feedback motion-reduce:transition-none forced-colors:bg-[Highlight];
+  }
+
+  .cn-progress-bar-fill[data-indeterminate] {
+    @apply w-2/5;
+    animation: cn-progress-indeterminate 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes cn-progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cn-progress-bar-fill[data-indeterminate] {
+    animation: none;
+    @apply w-full opacity-60;
+  }
+}
+
+@layer components {
+  .cn-sheet-overlay {
+    @apply bg-scrim supports-backdrop-filter:backdrop-blur-xs;
+  }
+
+  .cn-sheet-content {
+    @apply fixed z-50 flex flex-col gap-4 bg-surface-raised bg-clip-padding text-body text-foreground transition-[transform,opacity] duration-enter ease-enter data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=bottom]:border-boundary data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-r data-[side=left]:border-boundary data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-l data-[side=right]:border-boundary data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=top]:border-boundary data-[side=left]:sm:max-w-sm data-[side=right]:sm:max-w-sm;
+    box-shadow: 0 1rem 4rem color-mix(in srgb, var(--op-brand-emphasized) 18%, transparent);
+  }
+
+  .cn-sheet-close {
+    @apply absolute top-3 right-3;
+  }
+
+  .cn-sheet-header {
+    @apply gap-0.5 p-4;
+  }
+
+  .cn-sheet-footer {
+    @apply gap-2 p-4;
+  }
+
+  .cn-sheet-title {
+    @apply font-display text-subtitle text-foreground;
+  }
+
+  .cn-sheet-description {
+    @apply text-body-small text-foreground-muted;
+  }
+
+  .cn-dropdown-menu-content-aria {
+    @apply min-w-32 rounded-control border border-boundary bg-surface-raised p-1 text-body text-foreground transition-[opacity,transform] duration-enter ease-enter data-entering:translate-y-[-0.25rem] data-entering:opacity-0 data-exiting:translate-y-[-0.25rem] data-exiting:opacity-0 motion-reduce:transform-none motion-reduce:transition-none forced-colors:border-[CanvasText];
+    box-shadow: 0 1rem 4rem color-mix(in srgb, var(--op-brand-emphasized) 18%, transparent);
+  }
+
+  .cn-menu-translucent {
+    background: color-mix(in srgb, var(--op-surface-raised) 78%, transparent);
+    backdrop-filter: blur(24px) saturate(1.5);
+  }
+
+  .cn-dropdown-menu-item,
+  .cn-dropdown-menu-checkbox-item,
+  .cn-dropdown-menu-radio-item,
+  .cn-dropdown-menu-sub-trigger {
+    @apply min-h-[var(--op-target-minimum)] gap-2 rounded-control px-3 py-2 text-body text-foreground data-[focused]:bg-surface-sunken data-[pressed]:bg-surface-sunken data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[focus-visible]:outline-offset-[var(--op-focus-offset)] forced-colors:border forced-colors:border-transparent forced-colors:data-[focused]:border-[Highlight] [&_svg:not([class*='size-'])]:size-4;
+  }
+
+  .cn-dropdown-menu-item[data-variant="destructive"] {
+    @apply text-status-danger;
+  }
+
+  .cn-dropdown-menu-checkbox-item,
+  .cn-dropdown-menu-radio-item {
+    @apply pr-10;
+  }
+
+  .cn-dropdown-menu-item-indicator {
+    @apply absolute right-3 flex items-center justify-center;
+  }
+
+  .cn-dropdown-menu-label {
+    @apply px-3 py-2 text-body-small font-medium text-foreground-muted;
+  }
+
+  .cn-dropdown-menu-separator {
+    @apply -mx-1 my-1 h-px bg-boundary-subtle;
+  }
+
+  .cn-dropdown-menu-shortcut {
+    @apply ml-auto font-mono text-data text-foreground-muted;
+  }
+
+  .cn-dropdown-menu-sub-content-aria {
+    @apply min-w-32 rounded-control border border-boundary bg-surface-raised p-1 text-body text-foreground forced-colors:border-[CanvasText];
+    box-shadow: 0 1rem 4rem color-mix(in srgb, var(--op-brand-emphasized) 18%, transparent);
+  }
+
+  .cn-sidebar-gap {
+    @apply transition-[width] duration-layout ease-layout motion-reduce:transition-none;
+  }
+
+  .cn-sidebar-inner {
+    @apply bg-canvas-subtle group-data-[variant=floating]:rounded-control group-data-[variant=floating]:border group-data-[variant=floating]:border-boundary;
+  }
+
+  .cn-sidebar-trigger {
+    @apply size-[var(--op-target-minimum)];
+  }
+
+  .cn-sidebar-rail {
+    @apply after:bg-transparent hover:after:bg-boundary-strong focus-visible:after:bg-boundary-focus;
+  }
+
+  .cn-sidebar-inset {
+    @apply min-h-0 min-w-0 bg-surface md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-control md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2;
+  }
+
+  .cn-sidebar-input {
+    @apply min-h-[var(--op-target-minimum)] w-full bg-surface shadow-none;
+  }
+
+  .cn-sidebar-header {
+    @apply shrink-0 gap-2 p-2 group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0.5!;
+  }
+
+  .cn-sidebar-content {
+    @apply gap-0 overscroll-contain;
+  }
+
+  .cn-sidebar-footer {
+    @apply shrink-0 gap-2 border-t border-boundary-subtle p-2 group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0.5!;
+  }
+
+  .cn-sidebar-separator {
+    @apply mx-2 bg-boundary-subtle;
+  }
+
+  .cn-sidebar-group {
+    @apply p-2 group-data-[collapsible=icon]:p-0.5!;
+  }
+
+  .cn-sidebar-menu {
+    @apply gap-0;
+  }
+
+  .cn-sidebar-group-content {
+    @apply text-body;
+  }
+
+  .cn-sidebar-group-label {
+    @apply h-8 rounded-control px-2 font-body text-overline uppercase text-foreground-muted transition-[margin,opacity] duration-layout ease-layout group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 focus-visible:outline focus-visible:outline-[length:var(--op-focus-width)] focus-visible:outline-boundary-focus motion-reduce:transition-none [&>svg]:size-4;
+  }
+
+  .cn-sidebar-group-action {
+    @apply absolute top-1 right-1 size-[var(--op-target-minimum)] rounded-control p-0 text-foreground-secondary data-[hovered]:bg-surface-sunken data-[hovered]:text-foreground focus-visible:outline focus-visible:outline-[length:var(--op-focus-width)] focus-visible:outline-boundary-focus [&>svg]:size-4;
+  }
+
+  .cn-sidebar-menu-button {
+    @apply min-h-[var(--op-target-minimum)] gap-2 rounded-control p-2 text-left text-body text-foreground-secondary no-underline transition-[width,height,padding,background-color,color] duration-feedback ease-feedback group-has-data-[sidebar=menu-action]/menu-item:pr-12 group-data-[collapsible=icon]:size-[var(--op-target-minimum)]! group-data-[collapsible=icon]:p-2! data-[hovered]:bg-surface-sunken data-[hovered]:text-foreground data-[pressed]:bg-surface-sunken data-[pressed]:text-foreground data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[active=true]:bg-surface-raised data-[active=true]:font-medium data-[active=true]:text-foreground motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText];
+  }
+
+  .cn-sidebar-menu-button-aria {
+    @apply aria-expanded:bg-surface-sunken aria-expanded:text-foreground;
+  }
+
+  .cn-sidebar-menu-button-variant-outline {
+    @apply border border-boundary bg-surface data-[hovered]:border-boundary-strong;
+  }
+
+  .cn-sidebar-menu-button-size-default,
+  .cn-sidebar-menu-button-size-sm {
+    @apply min-h-[var(--op-target-minimum)];
+  }
+
+  .cn-sidebar-menu-button-size-sm {
+    @apply text-body-small;
+  }
+
+  .cn-sidebar-menu-button-size-lg {
+    @apply min-h-12 group-data-[collapsible=icon]:p-0!;
+  }
+
+  .cn-sidebar-menu-action {
+    @apply absolute top-0 right-0 size-[var(--op-target-minimum)] rounded-control p-0 text-foreground-secondary data-[hovered]:bg-surface-sunken data-[hovered]:text-foreground focus-visible:outline focus-visible:outline-[length:var(--op-focus-width)] focus-visible:outline-boundary-focus [&>svg]:size-4;
+  }
+
+  .cn-sidebar-menu-badge {
+    @apply pointer-events-none absolute top-3 right-2 h-5 min-w-5 rounded-badge bg-canvas-subtle px-1 font-mono text-data text-foreground-muted peer-data-[size=lg]/menu-button:top-3.5;
+  }
+
+  .cn-sidebar-menu-skeleton {
+    @apply min-h-[var(--op-target-minimum)] gap-2 rounded-control px-2;
+  }
+
+  .cn-sidebar-menu-skeleton-icon {
+    @apply size-4 shrink-0 rounded-badge;
+  }
+
+  .cn-sidebar-menu-skeleton-text {
+    @apply h-4 rounded-badge;
+  }
+
+  .cn-sidebar-menu-sub {
+    @apply mx-3.5 translate-x-px gap-1 border-l border-boundary-subtle px-2.5 py-0.5;
+  }
+
+  .cn-sidebar-menu-sub-button {
+    @apply min-h-[var(--op-target-minimum)] gap-2 rounded-control px-2 text-foreground-secondary no-underline data-[hovered]:bg-surface-sunken data-[hovered]:text-foreground data-[pressed]:bg-surface-sunken data-[pressed]:text-foreground data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[active=true]:bg-surface-raised data-[active=true]:text-foreground [&>svg]:size-4;
+  }
+
+  .cn-skeleton {
+    @apply rounded-badge bg-surface-sunken;
+  }
+
+  .cn-tooltip-content-aria {
+    @apply inline-flex items-center gap-1.5 rounded-control px-3 py-1.5 text-caption transition-[opacity,transform] duration-feedback ease-feedback data-entering:opacity-0 data-entering:scale-95 data-exiting:opacity-0 data-exiting:scale-95;
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--op-brand-emphasized) 18%, transparent);
+  }
+
+  /* --- Field shell, shared by TextField, NumberField, Select and CheckboxGroup --- */
+
+  .cn-field {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .cn-field-label {
+    @apply text-label font-medium text-foreground;
+  }
+
+  .cn-field-description {
+    @apply text-body-small text-foreground-muted;
+  }
+
+  .cn-field-error {
+    @apply text-body-small text-status-danger;
+  }
+
+  .cn-field-control {
+    @apply flex items-center gap-2 rounded-control border border-boundary-strong bg-surface transition-colors duration-feedback ease-feedback has-[input[data-focused]]:outline has-[input[data-focused]]:outline-[length:var(--op-focus-width)] has-[input[data-focused]]:outline-boundary-focus has-[input[data-focused]]:outline-offset-[var(--op-focus-offset)] motion-reduce:transition-none forced-colors:border-[ButtonText];
+  }
+
+  .cn-field[data-invalid] .cn-field-control {
+    @apply border-status-danger-boundary;
+  }
+
+  .cn-field-input {
+    @apply min-h-[var(--op-target-minimum)] border-0 bg-transparent px-3 py-2 text-body text-foreground data-[disabled]:cursor-not-allowed data-[disabled]:text-action-disabled-foreground;
+  }
+
+  .cn-field-suffix {
+    @apply shrink-0 pr-3 text-body-small text-foreground-muted;
+  }
+
+  /* --- Checkbox --- */
+
+  .cn-checkbox {
+    @apply flex cursor-pointer items-start gap-3 rounded-control border border-boundary-subtle bg-surface-raised p-3 text-left transition-colors duration-feedback ease-feedback data-[hovered]:border-boundary data-[selected]:border-action-primary data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[focus-visible]:outline-offset-[var(--op-focus-offset)] data-[disabled]:cursor-not-allowed data-[disabled]:opacity-[var(--op-interaction-disabled-opacity)] motion-reduce:transition-none forced-colors:border-[ButtonText] forced-colors:data-[selected]:border-[Highlight];
+  }
+
+  .cn-checkbox-control {
+    @apply mt-0.5 grid size-4 shrink-0 place-items-center rounded-[4px] border-2 border-boundary-strong bg-surface text-transparent transition-colors duration-feedback ease-feedback motion-reduce:transition-none;
+  }
+
+  .cn-checkbox[data-selected] .cn-checkbox-control,
+  .cn-checkbox[data-indeterminate] .cn-checkbox-control {
+    @apply border-action-primary bg-action-primary text-action-primary-foreground forced-colors:border-[Highlight] forced-colors:bg-[Highlight] forced-colors:text-[HighlightText];
+  }
+
+  .cn-checkbox-mark {
+    @apply size-3;
+  }
+
+  .cn-checkbox-content {
+    @apply min-w-0 flex-1;
+  }
+
+  .cn-checkbox-group {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .cn-checkbox-group-items {
+    @apply flex flex-col gap-2;
+  }
+
+  /* --- NumberField --- */
+
+  .cn-number-field-group {
+    @apply flex items-stretch overflow-hidden rounded-control border border-boundary-strong bg-surface transition-colors duration-feedback ease-feedback has-[input[data-focused]]:outline has-[input[data-focused]]:outline-[length:var(--op-focus-width)] has-[input[data-focused]]:outline-boundary-focus has-[input[data-focused]]:outline-offset-[var(--op-focus-offset)] motion-reduce:transition-none forced-colors:border-[ButtonText];
+  }
+
+  .cn-field[data-invalid] .cn-number-field-group {
+    @apply border-status-danger-boundary;
+  }
+
+  .cn-number-field-input {
+    @apply min-h-[var(--op-target-minimum)] w-full min-w-0 border-0 bg-transparent px-3 py-2 text-center text-body tabular-nums text-foreground outline-none;
+  }
+
+  .cn-number-field-step {
+    @apply grid w-9 shrink-0 place-items-center bg-surface-sunken text-foreground-secondary transition-colors duration-feedback ease-feedback data-[hovered]:bg-surface-raised data-[disabled]:cursor-not-allowed data-[disabled]:opacity-[var(--op-interaction-disabled-opacity)] motion-reduce:transition-none;
+  }
+
+  .cn-number-field-step-icon {
+    @apply size-3.5;
+  }
+
+  /* --- Select --- */
+
+  .cn-select-trigger {
+    @apply flex min-h-[var(--op-target-minimum)] w-full items-center justify-between gap-2 rounded-control border border-boundary-strong bg-surface px-3 py-2 text-left text-body text-foreground transition-colors duration-feedback ease-feedback data-[hovered]:border-boundary data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:outline-boundary-focus data-[focus-visible]:outline-offset-[var(--op-focus-offset)] data-[disabled]:cursor-not-allowed data-[disabled]:bg-action-disabled data-[disabled]:text-action-disabled-foreground motion-reduce:transition-none forced-colors:border-[ButtonText];
+  }
+
+  .cn-field[data-invalid] .cn-select-trigger {
+    @apply border-status-danger-boundary;
+  }
+
+  .cn-select-value {
+    @apply min-w-0 flex-1 truncate;
+  }
+
+  .cn-select-value[data-placeholder] {
+    @apply text-foreground-muted;
+  }
+
+  /* The trigger shows the selected option's own content, which is a flex
+     column. A flex container cannot place an ellipsis, so the trigger's
+     `truncate` clipped a long option name mid-glyph. Truncate the lines
+     themselves, which keeps a two-line option readable in the list while the
+     trigger cuts cleanly in a narrow toolbar. */
+  .cn-select-value .cn-select-item-content > * {
+    @apply truncate;
+  }
+
+  .cn-select-icon {
+    @apply size-4 shrink-0 text-foreground-muted;
+  }
+
+  .cn-select-popover {
+    @apply w-[var(--trigger-width)] min-w-[10rem] overflow-auto rounded-control border border-boundary-subtle bg-surface-raised p-1 transition-[opacity,transform] duration-feedback ease-feedback data-entering:opacity-0 data-exiting:opacity-0 motion-reduce:transition-none;
+    max-height: min(18rem, var(--available-height, 18rem));
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--op-brand-emphasized) 18%, transparent);
+  }
+
+  .cn-select-listbox {
+    @apply flex flex-col gap-0.5 outline-none;
+  }
+
+  .cn-select-item {
+    @apply flex cursor-pointer items-center justify-between gap-2 rounded-[6px] px-2.5 py-2 text-body text-foreground outline-none transition-colors duration-feedback ease-feedback data-[focused]:bg-surface-sunken data-[selected]:font-medium data-[disabled]:cursor-not-allowed data-[disabled]:opacity-[var(--op-interaction-disabled-opacity)] motion-reduce:transition-none forced-colors:data-[focused]:bg-[Highlight] forced-colors:data-[focused]:text-[HighlightText];
+  }
+
+  .cn-select-item-content {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .cn-select-item-detail {
+    @apply truncate text-caption text-foreground-muted;
+  }
+
+  .cn-select-item-indicator {
+    @apply size-4 shrink-0 text-action-primary forced-colors:text-[currentColor];
+  }
+
+  /* --- Dialog --- */
+
+  .cn-dialog-overlay {
+    background: color-mix(in srgb, var(--op-brand-emphasized) 55%, transparent);
+  }
+
+  .cn-dialog {
+    @apply flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden rounded-surface border border-boundary-subtle bg-surface-raised outline-none;
+    box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--op-brand-emphasized) 28%, transparent);
+  }
+
+  .cn-dialog-header {
+    @apply flex items-start gap-3 px-5 pt-5 pb-3;
+  }
+
+  .cn-dialog-heading {
+    @apply min-w-0 flex-1;
+  }
+
+  .cn-dialog-title {
+    @apply m-0 text-title text-foreground;
+  }
+
+  .cn-dialog-description {
+    @apply mt-1.5 block text-body-small text-foreground-secondary;
+  }
+
+  .cn-dialog-close {
+    @apply -mt-1 -mr-1 shrink-0;
+  }
+
+  .cn-dialog-body {
+    @apply min-h-0 flex-1 overflow-auto px-5 py-1;
+  }
+
+  .cn-dialog-footer {
+    @apply flex flex-wrap items-center justify-end gap-2 px-5 pt-4 pb-5;
+  }
+
+  /* --- DataTable --- */
+
+  .cn-data-table {
+    @apply w-full border-collapse text-left;
+  }
+
+  .cn-data-table-column {
+    @apply bg-surface-sunken px-3 py-2.5 text-caption font-semibold uppercase tracking-[0.045em] text-foreground-muted outline-none data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:-outline-offset-2 data-[focus-visible]:outline-boundary-focus;
+  }
+
+  .cn-data-table-column-content {
+    @apply flex items-center gap-1.5;
+  }
+
+  .cn-data-table-sort-icon {
+    @apply size-3.5;
+  }
+
+  .cn-data-table-row {
+    @apply border-t border-boundary-subtle outline-none transition-colors duration-feedback ease-feedback data-[hovered]:bg-surface-sunken data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:-outline-offset-2 data-[focus-visible]:outline-boundary-focus motion-reduce:transition-none;
+  }
+
+  .cn-data-table-row[data-href],
+  .cn-data-table-body[data-has-action] .cn-data-table-row {
+    @apply cursor-pointer;
+  }
+
+  .cn-data-table-cell {
+    @apply px-3 py-3 align-middle text-body-small text-foreground-secondary outline-none data-[focus-visible]:outline data-[focus-visible]:outline-[length:var(--op-focus-width)] data-[focus-visible]:-outline-offset-2 data-[focus-visible]:outline-boundary-focus;
+  }
+
+  .cn-data-table-cell-label {
+    @apply hidden text-caption font-semibold uppercase tracking-[0.04em] text-foreground-muted;
+  }
+
+  .cn-data-table-cell-content {
+    @apply block min-w-0;
+  }
+
+  /* --- Toast --- */
+
+  .cn-toast-region {
+    @apply pointer-events-none fixed inset-x-0 bottom-0 z-[120] flex flex-col items-center gap-2 p-4 sm:inset-x-auto sm:right-0 sm:items-end;
+  }
+
+  .cn-toast {
+    @apply pointer-events-auto flex w-full max-w-[24rem] items-start gap-3 rounded-control border border-boundary-subtle bg-surface-raised px-4 py-3;
+    box-shadow: 0 0.75rem 2rem color-mix(in srgb, var(--op-brand-emphasized) 22%, transparent);
+  }
+
+  .cn-toast--success {
+    @apply border-status-success-boundary bg-status-success-surface;
+  }
+
+  .cn-toast--danger {
+    @apply border-status-danger-boundary bg-status-danger-surface;
+  }
+
+  .cn-toast-content {
+    @apply min-w-0 flex-1;
+  }
+
+  .cn-toast-title {
+    @apply m-0 text-body-small font-semibold text-foreground;
+  }
+
+  .cn-toast-description {
+    @apply mt-1 m-0 text-caption text-foreground-secondary;
+  }
+
+  .cn-toast-dismiss {
+    @apply -mt-1 -mr-1.5 shrink-0;
+  }
+
+  .cn-tooltip-arrow {
+    @apply size-2.5 rounded-[2px];
+  }
+}
+
+@media (forced-colors: active) {
+  .cn-sheet-content,
+  .cn-sidebar-inner,
+  .cn-tooltip-content-aria,
+  .cn-dialog,
+  .cn-select-popover,
+  .cn-toast {
+    border: var(--op-boundary-thickness) solid CanvasText;
+  }
+}

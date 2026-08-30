@@ -1,0 +1,32 @@
+{
+  "name": "@repo/app-shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": ["./src/application-shell.css"],
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/application-shell.css"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@repo/ui-web": "workspace:*",
+    "lucide-react": "1.28.0",
+    "react-aria-components": "1.20.0"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3"
+  }
+}

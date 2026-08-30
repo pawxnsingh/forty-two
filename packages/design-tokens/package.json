@@ -1,0 +1,67 @@
+{
+  "name": "@repo/design-tokens",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Platform-neutral design tokens for Forty Two web and native clients.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "import": "./dist/web.js"
+    },
+    "./native": {
+      "types": "./dist/native.d.ts",
+      "import": "./dist/native.js"
+    },
+    "./tokens.css": "./dist/tokens.css",
+    "./tailwind.css": "./dist/tailwind.css",
+    "./tokens.json": "./dist/tokens.json",
+    "./tokens.schema.json": "./dist/tokens.schema.json",
+    "./assets/fonts/*": "./assets/fonts/*",
+    "./assets/licenses/*": "./assets/licenses/*"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/web.js",
+    "dist/web.d.ts",
+    "dist/native.js",
+    "dist/native.d.ts",
+    "dist/accessibility.d.ts",
+    "dist/contract.d.ts",
+    "dist/evidence.d.ts",
+    "dist/shared.d.ts",
+    "dist/themes.d.ts",
+    "dist/tokens.css",
+    "dist/tailwind.css",
+    "dist/tokens.json",
+    "dist/tokens.schema.json",
+    "assets",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "./dist/tokens.css",
+    "./dist/tailwind.css"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "generate": "node scripts/generate.mjs",
+    "generate:check": "node scripts/generate.mjs --check",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "test": "pnpm run build && node --test tests/*.test.mjs",
+    "validate": "node scripts/validate.mjs && pnpm run test"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "ajv": "8.20.0",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3"
+  }
+}
