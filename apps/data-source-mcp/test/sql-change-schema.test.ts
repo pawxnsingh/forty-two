@@ -15,6 +15,7 @@ import {
   PrepareSqlChangeInputSchema,
   PrepareSqlChangeToolInputSchema,
   requireAllowedTarget,
+  requireMatchingMutationTarget,
   isResumableSqlChangeError,
 } from "../src/sql-change-service.js";
 
@@ -35,6 +36,7 @@ test("accepts every strict prepare operation and rejects nested unknown fields",
       dataSourceId,
       operation: "update",
       sql: "UPDATE metrics SET value = 7 WHERE id = 2",
+      target,
     },
     {
       sessionId,
@@ -75,6 +77,16 @@ test("accepts every strict prepare operation and rejects nested unknown fields",
     PrepareSqlChangeInputSchema.safeParse({
       sessionId,
       dataSourceId,
+      operation: "update",
+      sql: "UPDATE metrics SET value = 7 WHERE id = 2",
+      target: { ...target, injected: true },
+    }).success,
+    false,
+  );
+  assert.equal(
+    PrepareSqlChangeInputSchema.safeParse({
+      sessionId,
+      dataSourceId,
       operation: "add_column",
       target: { ...target, injected: true },
       columnName: "note",
@@ -91,6 +103,23 @@ test("accepts every strict prepare operation and rejects nested unknown fields",
       columnName: "value",
     }).success,
     false,
+  );
+});
+
+test("declared row targets must resolve to the SQL-derived target", () => {
+  const metrics = {
+    catalog: "analytics",
+    schema: "reporting",
+    table: "metrics",
+  };
+  assert.doesNotThrow(() => requireMatchingMutationTarget(metrics, metrics));
+  assert.throws(
+    () =>
+      requireMatchingMutationTarget(metrics, {
+        ...metrics,
+        table: "unrelated",
+      }),
+    /does not match the SQL target/,
   );
 });
 

@@ -50,6 +50,7 @@ const RowPrepareSchema = z
     dataSourceId: DataSourceIdSchema,
     operation: z.enum(["insert", "update", "delete"]),
     sql: z.string().trim().min(1).max(100_000),
+    target: StructuredTargetSchema.optional(),
   })
   .strict();
 
@@ -166,7 +167,24 @@ export class SqlChangeService {
           dialect,
         )
       : StructuredColumnChangeSchema.parse(stripScope(parsed)).target;
-    requireAllowedTarget(requestedTarget, mutation);
+    const allowedRequestedTarget = requireAllowedTarget(
+      requestedTarget,
+      mutation,
+    );
+    if (isRowPrepare(parsed) && parsed.target) {
+      const allowedDeclaredTarget = requireAllowedTarget(
+        {
+          catalog: parsed.target.catalog ?? null,
+          schema: parsed.target.schema ?? null,
+          table: parsed.target.table,
+        },
+        mutation,
+      );
+      requireMatchingMutationTarget(
+        allowedRequestedTarget,
+        allowedDeclaredTarget,
+      );
+    }
     const rowLimit = maximumRows();
     const preparationMaximumBytesBilled =
       mutation.connectorType === "bigquery"
@@ -580,6 +598,23 @@ export function requireAllowedTarget(
     );
   }
   return allowed;
+}
+
+export function requireMatchingMutationTarget(
+  sqlTarget: { catalog: string | null; schema: string | null; table: string },
+  declaredTarget: {
+    catalog: string | null;
+    schema: string | null;
+    table: string;
+  },
+): void {
+  if (
+    sqlTarget.catalog !== declaredTarget.catalog ||
+    sqlTarget.schema !== declaredTarget.schema ||
+    sqlTarget.table !== declaredTarget.table
+  ) {
+    throw new Error("Declared mutation target does not match the SQL target.");
+  }
 }
 
 function qualifiedTargetQuoteFlags(sql: string | undefined): {
