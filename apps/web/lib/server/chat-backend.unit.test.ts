@@ -291,6 +291,42 @@ test("turn JSON rejects empty and oversized messages", async () => {
   }
 });
 
+test("JSON input rejects declared and streamed bodies above the byte ceiling", async () => {
+  const declared = {
+    headers: new Headers({
+      "content-type": "application/json",
+      "content-length": String(64 * 1024 + 1),
+    }),
+    body: null,
+  } as Request;
+  for (const request of [
+    declared,
+    new Request("http://localhost/api/chat/sessions/example/turns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              JSON.stringify({ message: "x".repeat(64 * 1024) }),
+            ),
+          );
+          controller.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit),
+  ]) {
+    await assert.rejects(
+      readTurnInput(request),
+      (error: unknown) =>
+        error instanceof ApiInputError &&
+        error.status === 413 &&
+        error.message === "Request body is too large.",
+    );
+  }
+});
+
 test("turn retries return the durable existing turn without another side effect", async () => {
   let stored: ChatTurnRequest | null = null;
   let createCalls = 0;

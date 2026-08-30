@@ -33,6 +33,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
 const MAX_MESSAGE_CHARS = 20_000;
+const MAX_JSON_BODY_BYTES = 64 * 1024;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/;
 const TERMINAL_TURN_STATES = new Set(["done", "error", "cancelled"]);
 export const SHARED_DATA_SOURCE_MCP_NAME = "forty-two-data-source";
@@ -397,16 +398,8 @@ export function validId(value: string, label: string): string {
 export async function readTurnInput(
   request: Request,
 ): Promise<TextUserMessage> {
-  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
-  if (contentType.startsWith("application/json")) {
-    const body = await request.json().catch(() => {
-      throw new ApiInputError("Request body must be valid JSON.");
-    });
-    if (!isRecord(body))
-      throw new ApiInputError("Request body must be an object.");
-    return { type: "user.message", content: validateMessage(body.message) };
-  }
-  throw new ApiInputError("Content-Type must be application/json.", 415);
+  const body = await requiredJsonBody(request);
+  return { type: "user.message", content: validateMessage(body.message) };
 }
 
 function validateMessage(value: unknown): string {
@@ -465,7 +458,7 @@ async function requiredJsonBody(
   if (!contentType.startsWith("application/json")) {
     throw new ApiInputError("Content-Type must be application/json.", 415);
   }
-  const text = await request.text();
+  const text = await boundedRequestText(request, MAX_JSON_BODY_BYTES);
   if (!text) throw new ApiInputError("Request body must be valid JSON.");
   let value: unknown;
   try {
@@ -476,6 +469,41 @@ async function requiredJsonBody(
   if (!isRecord(value))
     throw new ApiInputError("Request body must be an object.");
   return value;
+}
+
+async function boundedRequestText(
+  request: Request,
+  maximumBytes: number,
+): Promise<string> {
+  const declaredLength = request.headers.get("content-length");
+  if (
+    declaredLength !== null &&
+    (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maximumBytes)
+  ) {
+    throw new ApiInputError("Request body is too large.", 413);
+  }
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      totalBytes += next.value.byteLength;
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new ApiInputError("Request body is too large.", 413);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    Buffer.concat(chunks, totalBytes),
+  );
 }
 
 function optionalIdempotencyKey(request: Request): string | undefined {
