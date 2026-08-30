@@ -173,17 +173,45 @@ export async function waitForTurn(
   sessionId: string,
   turnId: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<TrueForgeApi.Turn> {
   const deadline = Date.now() + timeoutMs;
-  let turn = (await trueForgeClient().sessions.getTurn(sessionId, turnId)).data;
-  while (!TERMINAL_TURN_STATES.has(turn.state.status)) {
-    if (Date.now() >= deadline) {
+  while (true) {
+    assertWaitActive(signal);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new ApiInputError("Turn is still running.", 408);
+
+    const requestController = new AbortController();
+    const abortFromCaller = () => requestController.abort(signal?.reason);
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const deadlineTimer = setTimeout(() => requestController.abort(), remaining);
+    let turn: TrueForgeApi.Turn;
+    try {
+      turn = (
+        await trueForgeClient().sessions.getTurn(sessionId, turnId, {
+          abortSignal: requestController.signal,
+          maxRetries: 0,
+          timeoutInSeconds: Math.max(0.001, remaining / 1_000),
+        })
+      ).data;
+    } catch (error) {
+      assertWaitActive(signal);
+      if (requestController.signal.aborted || Date.now() >= deadline) {
+        throw new ApiInputError("Turn is still running.", 408);
+      }
+      throw error;
+    } finally {
+      clearTimeout(deadlineTimer);
+      signal?.removeEventListener("abort", abortFromCaller);
+    }
+
+    if (TERMINAL_TURN_STATES.has(turn.state.status)) return turn;
+    const delayRemaining = deadline - Date.now();
+    if (delayRemaining <= 0) {
       throw new ApiInputError("Turn is still running.", 408);
     }
-    await delay(750);
-    turn = (await trueForgeClient().sessions.getTurn(sessionId, turnId)).data;
+    await abortableDelay(Math.min(750, delayRemaining), signal);
   }
-  return turn;
 }
 
 export function parseWaitTimeout(body: unknown): number {
@@ -350,4 +378,30 @@ function asError(value: unknown): Error {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function assertWaitActive(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new ApiInputError("Wait request was cancelled.", 499);
+  }
+}
+
+function abortableDelay(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertWaitActive(signal);
+  if (!signal) return delay(milliseconds);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(new ApiInputError("Wait request was cancelled.", 499));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }

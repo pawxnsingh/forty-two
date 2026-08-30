@@ -29,6 +29,7 @@ export async function POST(
       validId(sessionId, "session id"),
       validId(turnId, "turn id"),
       parseWaitTimeout(body),
+      request.signal,
     );
     return Response.json({ data: turn });
   } catch (error) {
