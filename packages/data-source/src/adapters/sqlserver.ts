@@ -15,6 +15,20 @@ import {
 } from "./base.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { convertPositionalPlaceholders } from "./helpers/positional-placeholders.js";
+import type {
+  ApplyControlledMutationInput,
+  ApplyControlledMutationResult,
+} from "../mutations/types.js";
+import {
+  assertAffectedRows,
+  assertMutationPreconditions,
+  verifiedRowEvidence,
+} from "../mutations/verify.js";
+import {
+  boundedStructuredMutationSelect,
+  type ApplyStructuredColumnChangeInput,
+  type ApplyStructuredColumnChangeResult,
+} from "../mutations/structured-column-change.js";
 
 // Internal types for mssql column metadata that aren't properly exported
 interface ColumnMetadata {
@@ -110,16 +124,58 @@ export class SQLServerAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
-    const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
+    if (!this.pool) {
+      throw new Error("SQL Server connection pool not initialized");
+    }
+    return this.executeRequest(
+      this.pool.request(),
+      sqlQuery,
+      params,
+      maxRows,
+      timeout,
+    );
+  }
 
+  async queryReadOnly(
+    sqlQuery: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    this.ensureConnected();
     if (!this.pool) {
       throw new Error("SQL Server connection pool not initialized");
     }
 
+    const transaction = new sql.Transaction(this.pool);
+    await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
     try {
-      const request = this.pool.request();
+      const result = await this.executeRequest(
+        transaction.request(),
+        sqlQuery,
+        params,
+        maxRows,
+        timeout,
+      );
+      await transaction.rollback();
+      return result;
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined);
+      throw error;
+    }
+  }
 
+  private async executeRequest(
+    request: sql.Request,
+    sqlQuery: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(timeout);
+
+    try {
       const parameterValues = params ?? [];
       const processedQuery = convertPositionalPlaceholders(
         sqlQuery,
@@ -335,4 +391,159 @@ export class SQLServerAdapter extends BaseAdapter {
       );
     }
   }
+
+  override async applyControlledMutation(
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    const timeoutMs = resolveQueryTimeout(input.timeout);
+    this.ensureConnected();
+    if (!this.pool) throw new Error("SQL Server pool not initialized");
+    const transaction = new sql.Transaction(this.pool);
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    try {
+      const lockedSql = input.preconditionSql.replace(
+        new RegExp(`FROM\\s+${escapeRegex(input.targetSql)}`, "i"),
+        `FROM ${input.targetSql} WITH (UPDLOCK, HOLDLOCK)`,
+      );
+      const locked = await this.executeRequest(
+        transaction.request(),
+        lockedSql,
+        input.preconditionParams,
+        undefined,
+        timeoutMs,
+      );
+      assertMutationPreconditions(locked.rows, input.expectedRowHashes);
+
+      const request = transaction.request();
+      const conversion = convertPositionalPlaceholders(
+        input.canonicalSql,
+        input.params.length,
+        (index) => `@param${index}`,
+      );
+      input.params.forEach((parameter, index) =>
+        request.input(`param${index}`, parameter),
+      );
+      const changed = await this.executeWithTimeout(
+        request,
+        request.query(conversion.sql),
+        timeoutMs,
+      );
+      const rowCount = changed.rowsAffected[0] ?? 0;
+      assertAffectedRows(rowCount, input.expectedAffectedRows);
+      const evidence = await transaction
+        .request()
+        .query<{ id: string }>(
+          "SELECT CONVERT(varchar(128), CURRENT_TRANSACTION_ID()) AS id",
+        );
+      const providerExecutionId = evidence.recordset[0]?.id;
+      if (!providerExecutionId) {
+        throw new Error("SQL Server transaction evidence is unavailable.");
+      }
+      await transaction.commit();
+      return {
+        rowCount,
+        providerExecutionId,
+        verification: {
+          isolation: "serializable",
+          locking: "UPDLOCK,HOLDLOCK",
+          lockedRows: locked.rows.length,
+          affectedRows: rowCount,
+        },
+      };
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  override async applyStructuredColumnChange(
+    input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult> {
+    const timeoutMs = resolveQueryTimeout(input.timeout);
+    this.ensureConnected();
+    if (!this.pool) throw new Error("SQL Server pool not initialized");
+    const transaction = new sql.Transaction(this.pool);
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    try {
+      let preconditionRows: Record<string, unknown>[] = [];
+      if (input.backfillSql) {
+        if (!input.preconditionSql || !input.verificationSql) {
+          throw new Error("Stored backfill preconditions are unavailable.");
+        }
+        preconditionRows = (
+          await transaction
+            .request()
+            .query(
+              boundedStructuredMutationSelect(
+                input.preconditionSql,
+                "transactsql",
+                input.maximumRows,
+              ),
+            )
+        ).recordset.map(normalizeRowValues);
+        assertMutationPreconditions(
+          preconditionRows,
+          input.expectedPreconditionRowHashes ?? input.expectedRowHashes,
+        );
+      }
+      if (!input.skipDdl) await transaction.request().query(input.ddlSql);
+      const changed = input.backfillSql
+        ? await transaction.request().query(input.backfillSql)
+        : null;
+      const rowCount = changed?.rowsAffected[0] ?? 0;
+      assertAffectedRows(rowCount, input.expectedAffectedRows);
+      const evidence = await transaction
+        .request()
+        .query<{ id: string }>(
+          "SELECT CONVERT(varchar(128), CURRENT_TRANSACTION_ID()) AS id",
+        );
+      const providerExecutionId = evidence.recordset[0]?.id;
+      if (!providerExecutionId)
+        throw new Error("SQL Server DDL evidence is unavailable.");
+      const finalEvidence = input.verificationSql
+        ? verifiedRowEvidence(
+            (
+              await transaction
+                .request()
+                .query(
+                  boundedStructuredMutationSelect(
+                    input.verificationSql,
+                    "transactsql",
+                    input.maximumRows,
+                  ),
+                )
+            ).recordset.map(normalizeRowValues),
+            input.expectedRowHashes,
+          )
+        : {};
+      await transaction.commit();
+      return {
+        rowCount,
+        providerExecutionId,
+        verification: {
+          mode: "transactional_ddl",
+          isolation: "serializable",
+          preconditionRows: preconditionRows.length,
+          ...finalEvidence,
+          phases: input.backfillSql
+            ? [
+                input.skipDdl ? "column_already_added" : "column_added",
+                "backfill_applied",
+              ]
+            : [
+                input.operation === "rename_column"
+                  ? "renamed"
+                  : "column_added",
+              ],
+        },
+      };
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined);
+      throw error;
+    }
+  }
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

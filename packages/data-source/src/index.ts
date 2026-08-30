@@ -36,3 +36,4 @@ export {
   isValidCredentials,
   toCredentials,
 } from "./utils/validate-credentials.js";
+export * from "./mutations/index.js";

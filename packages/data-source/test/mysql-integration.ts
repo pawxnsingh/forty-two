@@ -73,10 +73,40 @@ try {
   assert.equal(bounded.rows.length, 2);
   assert.equal(bounded.hasMoreRows, true);
 
+  const exactNumbers = await adapter.query(
+    `SELECT
+       CAST(9223372036854775807 AS SIGNED) AS signed_bigint,
+       CAST(18446744073709551615 AS UNSIGNED) AS unsigned_bigint,
+       CAST(12345678901234567890.1234567890 AS DECIMAL(30, 10)) AS exact_decimal,
+       CAST(NULL AS SIGNED) AS null_bigint,
+       CAST(NULL AS DECIMAL(30, 10)) AS null_decimal`,
+    undefined,
+    10,
+  );
+  assert.deepEqual(exactNumbers.rows, [
+    {
+      signed_bigint: "9223372036854775807",
+      unsigned_bigint: "18446744073709551615",
+      exact_decimal: "12345678901234567890.1234567890",
+      null_bigint: null,
+      null_decimal: null,
+    },
+  ]);
+  assert.deepEqual(
+    exactNumbers.fields.map(({ name, type }) => ({ name, type })),
+    [
+      { name: "signed_bigint", type: "bigint" },
+      { name: "unsigned_bigint", type: "bigint" },
+      { name: "exact_decimal", type: "decimal" },
+      { name: "null_bigint", type: "bigint" },
+      { name: "null_decimal", type: "decimal" },
+    ],
+  );
+
   const reconnected = await adapter.query(
     "SELECT COUNT(*) AS total FROM users",
   );
-  assert.equal(reconnected.rows[0]?.total, 5);
+  assert.equal(reconnected.rows[0]?.total, "5");
 
   const activeQuery = adapter.query("SELECT SLEEP(0.25) AS waited");
   let closeSettled = false;
@@ -87,7 +117,7 @@ try {
   assert.equal(closeSettled, false);
   const activeResult = await activeQuery;
   await closing;
-  assert.equal(activeResult.rows[0]?.waited, 0);
+  assert.equal(activeResult.rows[0]?.waited, "0");
 } finally {
   await adapter.close();
 }

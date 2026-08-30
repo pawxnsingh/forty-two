@@ -90,6 +90,8 @@ export interface Column {
   position: number;
   /** Data type */
   dataType: string;
+  /** Provider-normalized physical type, including parameters/sign where exposed */
+  physicalType?: string;
   /** Whether column allows null values */
   isNullable: boolean;
   /** Default value */

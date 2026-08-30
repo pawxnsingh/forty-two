@@ -363,11 +363,12 @@ export class RedshiftIntrospector extends BaseIntrospector {
         database: this.getString(row.database) || "",
         position: this.parseNumber(row.position) || 0,
         dataType: this.getString(row.data_type) || "",
+        physicalType: this.getString(row.data_type),
         isNullable: this.getString(row.is_nullable) === "YES",
-        defaultValue: this.getString(row.default_value) || "",
-        maxLength: this.parseNumber(row.max_length) ?? 0,
-        precision: this.parseNumber(row.precision) ?? 0,
-        scale: this.parseNumber(row.scale) ?? 0,
+        defaultValue: this.getString(row.default_value),
+        maxLength: this.parseNumber(row.max_length),
+        precision: this.parseNumber(row.precision),
+        scale: this.parseNumber(row.scale),
       }));
 
       // Only cache if we fetched all columns (no filters)

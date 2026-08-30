@@ -1,6 +1,7 @@
 import {
   BigQuery,
   type BigQueryOptions,
+  type Job,
   type Query,
   type QueryRowsResponse,
   type TableSchema,
@@ -27,6 +28,22 @@ import {
   getBigQuerySimpleType,
   mapBigQueryType,
 } from "./type-mappings/bigquery.js";
+import type {
+  ApplyControlledMutationInput,
+  ApplyControlledMutationResult,
+} from "../mutations/types.js";
+import {
+  assertAffectedRows,
+  verifiedRowEvidence,
+} from "../mutations/verify.js";
+import {
+  buildBigQueryBackfillScript,
+  buildBigQueryRowMutationScript,
+} from "../mutations/bigquery-workflow.js";
+import {
+  type ApplyStructuredColumnChangeInput,
+  type ApplyStructuredColumnChangeResult,
+} from "../mutations/structured-column-change.js";
 
 /**
  * BigQuery database adapter
@@ -85,6 +102,56 @@ export class BigQueryAdapter extends BaseAdapter {
     maxRows?: number,
     timeout?: number,
   ): Promise<AdapterQueryResult> {
+    return this.executeQuery(sql, params, maxRows, timeout);
+  }
+
+  async queryReadOnly(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+    maximumBytesBilled?: string,
+  ): Promise<AdapterQueryResult> {
+    const timeoutMs = resolveQueryTimeout(timeout);
+    this.ensureConnected();
+    if (!this.client) throw new Error("BigQuery client not initialized");
+
+    const options = this.buildQueryOptions(sql, params, timeoutMs, maxRows);
+    const [dryRunJob] = await this.client.createQueryJob({
+      ...options,
+      dryRun: true,
+    });
+    const [metadata] = await dryRunJob.getMetadata();
+    const statementType = metadata.statistics?.query?.statementType;
+    if (statementType !== "SELECT") {
+      throw new Error("BigQuery read-only execution requires a SELECT job");
+    }
+    const bytesProcessed = String(
+      metadata.statistics?.totalBytesProcessed ?? "0",
+    );
+    if (maximumBytesBilled !== undefined) {
+      assertBigQueryMaximumBytes(maximumBytesBilled);
+      if (BigInt(bytesProcessed) > BigInt(maximumBytesBilled)) {
+        throw new Error("BigQuery read exceeds the configured cost limit.");
+      }
+    }
+    const result = await this.executeQuery(
+      sql,
+      params,
+      maxRows,
+      timeout,
+      maximumBytesBilled,
+    );
+    return { ...result, bytesProcessed };
+  }
+
+  private async executeQuery(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+    maximumBytesBilled?: string,
+  ): Promise<AdapterQueryResult> {
     const timeoutMs = resolveQueryTimeout(timeout);
     this.ensureConnected();
 
@@ -93,42 +160,17 @@ export class BigQueryAdapter extends BaseAdapter {
     }
 
     try {
-      // Fix SQL to ensure proper escaping of identifiers with special characters
-      const fixedSql = fixBigQueryTableReferences(sql);
-
-      // Debug logging removed - was using console.log which violates linting rules
-      // The fix is still applied, just without logging
-
-      const options: Query = {
-        query: fixedSql,
-        useLegacySql: false,
-      };
-
-      options.jobTimeoutMs = timeoutMs;
+      const options = this.buildQueryOptions(sql, params, timeoutMs, maxRows);
+      if (maximumBytesBilled !== undefined) {
+        assertBigQueryMaximumBytes(maximumBytesBilled);
+        options.maximumBytesBilled = maximumBytesBilled;
+      }
 
       // Apply row limit if specified
       let hasMoreRows = false;
       if (maxRows && maxRows > 0) {
         // BigQuery supports maxResults natively
         options.maxResults = maxRows + 1;
-      }
-
-      // BigQuery uses named parameters, so convert positional placeholders.
-      const parameterValues = params ?? [];
-      const conversion = convertPositionalPlaceholders(
-        fixedSql,
-        parameterValues.length,
-        (index) => `@param${index}`,
-        { hashLineComments: true },
-      );
-      options.query = conversion.sql;
-
-      if (parameterValues.length > 0) {
-        const namedParams: Record<string, QueryParameter> = {};
-        parameterValues.forEach((value, index) => {
-          namedParams[`param${index}`] = value;
-        });
-        options.params = namedParams;
       }
 
       const [job] = await this.client.createQueryJob(options);
@@ -210,6 +252,34 @@ export class BigQueryAdapter extends BaseAdapter {
         `BigQuery query failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
     }
+  }
+
+  private buildQueryOptions(
+    sql: string,
+    params: QueryParameter[] | undefined,
+    timeoutMs: number,
+    maxRows: number | undefined,
+  ): Query {
+    const fixedSql = fixBigQueryTableReferences(sql);
+    const parameterValues = params ?? [];
+    const conversion = convertPositionalPlaceholders(
+      fixedSql,
+      parameterValues.length,
+      (index) => `@param${index}`,
+      { hashLineComments: true },
+    );
+    const options: Query = {
+      query: conversion.sql,
+      useLegacySql: false,
+      jobTimeoutMs: timeoutMs,
+      ...(maxRows && maxRows > 0 ? { maxResults: maxRows + 1 } : {}),
+    };
+    if (parameterValues.length > 0) {
+      options.params = Object.fromEntries(
+        parameterValues.map((value, index) => [`param${index}`, value]),
+      );
+    }
+    return options;
   }
 
   async testConnection(): Promise<boolean> {
@@ -313,4 +383,251 @@ export class BigQueryAdapter extends BaseAdapter {
       );
     }
   }
+
+  override async estimateControlledMutation(input: {
+    canonicalSql: string;
+    params: QueryParameter[];
+    timeout?: number;
+  }): Promise<Record<string, unknown> | null> {
+    const timeoutMs = resolveQueryTimeout(input.timeout);
+    this.ensureConnected();
+    if (!this.client) throw new Error("BigQuery client not initialized");
+    const options = this.buildQueryOptions(
+      input.canonicalSql,
+      input.params,
+      timeoutMs,
+      undefined,
+    );
+    const [job] = await this.client.createQueryJob({
+      ...options,
+      dryRun: true,
+    });
+    const [metadata] = await job.getMetadata();
+    const bytes = metadata.statistics?.totalBytesProcessed ?? "0";
+    return {
+      dryRunBytesProcessed: String(bytes),
+      location: options.location ?? null,
+    };
+  }
+
+  override async applyControlledMutation(
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    const timeoutMs = resolveQueryTimeout(input.timeout);
+    this.ensureConnected();
+    if (!this.client) throw new Error("BigQuery client not initialized");
+    if (input.providerPrecondition?.kind !== "bigquery_row_json") {
+      throw new Error(
+        "BigQuery provider precondition evidence is unavailable.",
+      );
+    }
+    const script = buildBigQueryRowMutationScript({
+      preconditionSql: input.preconditionSql,
+      mutationSql: input.canonicalSql,
+      expectedRows: input.providerPrecondition.values,
+      expectedAffectedRows: input.expectedAffectedRows,
+    });
+    const options = {
+      ...this.buildQueryOptions(script, input.params, timeoutMs, undefined),
+      ...(input.maximumBytesBilled
+        ? { maximumBytesBilled: input.maximumBytesBilled }
+        : {}),
+    };
+    const job = await this.runIdempotentMutationJob(
+      options,
+      `${input.executionToken}_row`,
+      script,
+    );
+    const providerExecutionId = job.id;
+    if (!providerExecutionId)
+      throw new Error("BigQuery job evidence is unavailable.");
+    return {
+      rowCount: input.expectedAffectedRows,
+      providerExecutionId,
+      verification: {
+        mode: "multi_statement_transaction",
+        preconditionRows: input.providerPrecondition.values.length,
+        affectedRows: input.expectedAffectedRows,
+      },
+    };
+  }
+
+  override async applyStructuredColumnChange(
+    input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult> {
+    const timeoutMs = resolveQueryTimeout(input.timeout);
+    this.ensureConnected();
+    if (!this.client) throw new Error("BigQuery client not initialized");
+    let ddlCompleted = input.skipDdl === true;
+    try {
+      if (!input.skipDdl) ddlCompleted = true;
+      const ddlJob = input.skipDdl
+        ? null
+        : await this.runIdempotentMutationJob(
+            {
+              ...this.buildQueryOptions(input.ddlSql, [], timeoutMs, undefined),
+              ...(input.maximumBytesBilled
+                ? { maximumBytesBilled: input.maximumBytesBilled }
+                : {}),
+            },
+            `${input.executionToken}_ddl`,
+            input.ddlSql,
+          );
+      let rowCount = 0;
+      let backfillJobId: string | undefined;
+      let finalEvidence: Record<string, unknown> = {};
+      if (input.backfillSql) {
+        if (
+          !input.preconditionSql ||
+          !input.verificationSql ||
+          input.providerPrecondition?.kind !== "bigquery_row_json"
+        ) {
+          throw new Error(
+            "Stored BigQuery backfill preconditions are unavailable.",
+          );
+        }
+        const script = buildBigQueryBackfillScript({
+          preconditionSql: input.preconditionSql,
+          backfillSql: input.backfillSql,
+          verificationSql: input.verificationSql,
+          expectedRows: input.providerPrecondition.values,
+          expectedVerificationRows:
+            input.providerPrecondition.verificationValues,
+          expectedAffectedRows: input.expectedAffectedRows,
+        });
+        try {
+          const backfillJob = await this.runIdempotentMutationJob(
+            {
+              ...this.buildQueryOptions(script, [], timeoutMs, undefined),
+              ...(input.maximumBytesBilled
+                ? { maximumBytesBilled: input.maximumBytesBilled }
+                : {}),
+            },
+            `${input.executionToken}_backfill`,
+            script,
+          );
+          backfillJobId = backfillJob.id;
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            /stale backfill precondition|affected row mismatch|backfill verification mismatch/i.test(
+              error.message,
+            )
+          ) {
+            error.name = "SqlChangeStaleError";
+          }
+          throw error;
+        }
+        rowCount = input.expectedAffectedRows;
+        finalEvidence = verifiedRowEvidence(
+          providerJsonRows(
+            input.providerPrecondition.verificationValues ??
+              input.providerPrecondition.values,
+          ),
+          input.expectedRowHashes,
+        );
+      } else {
+        assertAffectedRows(0, input.expectedAffectedRows);
+      }
+      const resumeJob =
+        input.skipDdl && !backfillJobId
+          ? await this.runIdempotentMutationJob(
+              this.buildQueryOptions(
+                "SELECT CURRENT_TIMESTAMP()",
+                [],
+                timeoutMs,
+                undefined,
+              ),
+              `${input.executionToken}_resume`,
+              "SELECT CURRENT_TIMESTAMP()",
+            )
+          : null;
+      const providerExecutionId = backfillJobId ?? ddlJob?.id ?? resumeJob?.id;
+      if (!providerExecutionId)
+        throw new Error("BigQuery DDL job evidence is unavailable.");
+      return {
+        rowCount,
+        providerExecutionId,
+        verification: {
+          mode: "idempotent_implicit_commit",
+          ddlJobId: ddlJob?.id ?? null,
+          ...(backfillJobId ? { backfillJobId } : {}),
+          ...finalEvidence,
+          phases: input.backfillSql
+            ? [
+                input.skipDdl ? "column_already_added" : "column_added",
+                "backfill_applied",
+              ]
+            : [
+                input.operation === "rename_column"
+                  ? "renamed"
+                  : "column_added",
+              ],
+        },
+      };
+    } catch (error) {
+      if (
+        ddlCompleted &&
+        error instanceof Error &&
+        error.name !== "SqlChangeStaleError"
+      ) {
+        error.name = "SqlChangeResumeRequiredError";
+      }
+      throw error;
+    }
+  }
+
+  private async runIdempotentMutationJob(
+    options: Query,
+    jobId: string,
+    expectedSql: string,
+  ): Promise<Job> {
+    this.ensureConnected();
+    if (!this.client) throw new Error("BigQuery client not initialized");
+    let job: Job;
+    try {
+      [job] = await this.client.createQueryJob({ ...options, jobId });
+    } catch (error) {
+      if (!isBigQueryAlreadyExists(error)) throw error;
+      job = this.client.job(jobId, {
+        location:
+          typeof options.location === "string" ? options.location : undefined,
+      });
+    }
+    await job.getQueryResults();
+    const [metadata] = await job.getMetadata();
+    if (metadata.configuration?.query?.query !== expectedSql) {
+      const error = new Error(
+        "BigQuery mutation job identity collision detected.",
+      );
+      error.name = "SqlChangeStaleError";
+      throw error;
+    }
+    return job;
+  }
+}
+
+function assertBigQueryMaximumBytes(value: string): void {
+  if (!/^[1-9][0-9]{0,19}$/.test(value)) {
+    throw new Error("BigQuery maximumBytesBilled must be a positive integer.");
+  }
+}
+
+function providerJsonRows(values: string[]): Record<string, unknown>[] {
+  return values.map((value) => {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("BigQuery provider verification evidence is invalid.");
+    }
+    return parsed as Record<string, unknown>;
+  });
+}
+
+function isBigQueryAlreadyExists(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    Number(error.code) === 409
+  );
 }

@@ -13,6 +13,7 @@ import {
 } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
 import { resolveQueryTimeout } from "../utils/query-options.js";
+import { checkQueryIsReadOnly } from "../utils/sql-validation.js";
 import {
   type AdapterQueryResult,
   BaseAdapter,
@@ -20,6 +21,22 @@ import {
 } from "./base.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { mapSnowflakeType } from "./type-mappings/snowflake.js";
+import { AsyncMutex } from "./helpers/async-mutex.js";
+import {
+  SqlChangePartialCommitError,
+  type ApplyControlledMutationInput,
+  type ApplyControlledMutationResult,
+} from "../mutations/types.js";
+import {
+  assertAffectedRows,
+  assertMutationPreconditions,
+  verifiedRowEvidence,
+} from "../mutations/verify.js";
+import {
+  boundedStructuredMutationSelect,
+  type ApplyStructuredColumnChangeInput,
+  type ApplyStructuredColumnChangeResult,
+} from "../mutations/structured-column-change.js";
 
 // Use Snowflake SDK types directly
 type SnowflakeError = snowflake.SnowflakeError;
@@ -40,6 +57,7 @@ interface SnowflakeStatement {
   }) => NodeJS.ReadableStream;
   cancel?: (callback: (err: Error | undefined) => void) => void;
   getNumUpdatedRows?: () => number | undefined;
+  getStatementId?: () => string | undefined;
 }
 
 // Configure Snowflake SDK to disable logging
@@ -52,6 +70,7 @@ snowflake.configure({
 export class SnowflakeAdapter extends BaseAdapter {
   private connection?: snowflake.Connection | undefined;
   private introspector?: SnowflakeIntrospector;
+  private readonly queryMutex = new AsyncMutex();
 
   async initialize(credentials: Credentials): Promise<void> {
     this.validateCredentials(credentials, DataSourceType.Snowflake);
@@ -154,6 +173,42 @@ export class SnowflakeAdapter extends BaseAdapter {
   }
 
   async query(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(() =>
+      this.queryExclusive(sql, params, maxRows, timeout),
+    );
+  }
+
+  async queryReadOnly(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    const validation = checkQueryIsReadOnly(sql, "snowflake");
+    if (!validation.isReadOnly) {
+      throw new Error(
+        validation.error ?? "Snowflake read-only execution requires SELECT",
+      );
+    }
+    return this.queryMutex.runExclusive(async () => {
+      await this.executeControlStatement("BEGIN");
+      try {
+        const result = await this.queryExclusive(sql, params, maxRows, timeout);
+        await this.executeControlStatement("ROLLBACK");
+        return result;
+      } catch (error) {
+        await this.executeControlStatement("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  private async queryExclusive(
     sql: string,
     params?: QueryParameter[],
     maxRows?: number,
@@ -292,6 +347,23 @@ export class SnowflakeAdapter extends BaseAdapter {
     }
   }
 
+  private async executeControlStatement(sqlText: string): Promise<void> {
+    this.ensureConnected();
+    if (!this.connection) {
+      throw new Error("Snowflake connection not initialized");
+    }
+    const connection = this.connection;
+    await new Promise<void>((resolve, reject) => {
+      connection.execute({
+        sqlText,
+        complete: (error: SnowflakeError | undefined) => {
+          if (error) reject(new Error("Snowflake transaction control failed"));
+          else resolve();
+        },
+      });
+    });
+  }
+
   async testConnection(): Promise<boolean> {
     if (!this.connection) {
       return false;
@@ -400,4 +472,256 @@ export class SnowflakeAdapter extends BaseAdapter {
       });
     }
   }
+
+  override async applyControlledMutation(
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    return this.queryMutex.runExclusive(async () => {
+      const timeoutMs = resolveQueryTimeout(
+        input.timeout,
+        TIMEOUT_CONFIG.query.default,
+      );
+      await this.executeControlStatement("BEGIN");
+      try {
+        const current = await this.queryExclusive(
+          input.preconditionSql,
+          input.preconditionParams,
+          101,
+          timeoutMs,
+        );
+        assertMutationPreconditions(current.rows, input.expectedRowHashes);
+        const changed = await this.executeMutationStatement(
+          input.canonicalSql,
+          input.params,
+          timeoutMs,
+        );
+        assertAffectedRows(changed.rowCount, input.expectedAffectedRows);
+        if (!changed.statementId) {
+          throw new Error("Snowflake statement evidence is unavailable.");
+        }
+        await this.executeControlStatement("COMMIT");
+        return {
+          rowCount: changed.rowCount,
+          providerExecutionId: changed.statementId,
+          verification: {
+            isolation: "provider transaction",
+            conflictHandling:
+              "provider write-conflict plus locked-state recheck",
+            lockedRows: current.rows.length,
+            affectedRows: changed.rowCount,
+          },
+        };
+      } catch (error) {
+        await this.executeControlStatement("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  override async applyStructuredColumnChange(
+    input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult> {
+    return this.queryMutex.runExclusive(async () => {
+      const timeoutMs = resolveQueryTimeout(
+        input.timeout,
+        TIMEOUT_CONFIG.query.default,
+      );
+      let ddlCompleted = input.skipDdl === true;
+      let ddlStatementId: string | undefined;
+      try {
+        const ddl = input.skipDdl
+          ? null
+          : await this.executeMutationStatement(input.ddlSql, [], timeoutMs);
+        if (ddl) {
+          if (!ddl.statementId) {
+            throw new Error("Snowflake DDL evidence is unavailable.");
+          }
+          ddlStatementId = ddl.statementId;
+          ddlCompleted = true;
+        }
+        let rowCount = 0;
+        let backfillStatementId: string | undefined;
+        let preconditionRows: Record<string, unknown>[] = [];
+        let finalEvidence: Record<string, unknown> = {};
+        if (input.backfillSql) {
+          if (!input.preconditionSql || !input.verificationSql) {
+            throw new Error("Stored backfill preconditions are unavailable.");
+          }
+          await this.executeControlStatement("BEGIN");
+          try {
+            preconditionRows = (
+              await this.queryExclusive(
+                boundedStructuredMutationSelect(
+                  input.preconditionSql,
+                  "snowflake",
+                  input.maximumRows,
+                ),
+                [],
+                input.maximumRows + 1,
+                timeoutMs,
+              )
+            ).rows;
+            assertMutationPreconditions(
+              preconditionRows,
+              input.expectedPreconditionRowHashes ?? input.expectedRowHashes,
+            );
+            const changed = await this.executeMutationStatement(
+              input.backfillSql,
+              [],
+              timeoutMs,
+            );
+            rowCount = changed.rowCount;
+            backfillStatementId = changed.statementId;
+            assertAffectedRows(rowCount, input.expectedAffectedRows);
+            finalEvidence = verifiedRowEvidence(
+              (
+                await this.queryExclusive(
+                  boundedStructuredMutationSelect(
+                    input.verificationSql,
+                    "snowflake",
+                    input.maximumRows,
+                  ),
+                  [],
+                  input.maximumRows + 1,
+                  timeoutMs,
+                )
+              ).rows,
+              input.expectedRowHashes,
+            );
+            await this.executeControlStatement("COMMIT");
+          } catch (error) {
+            await this.executeControlStatement("ROLLBACK").catch(
+              () => undefined,
+            );
+            throw error;
+          }
+        } else {
+          assertAffectedRows(0, input.expectedAffectedRows);
+        }
+        const resumeEvidence =
+          input.skipDdl && !backfillStatementId
+            ? await this.executeMutationStatement(
+                "SELECT CURRENT_TIMESTAMP()",
+                [],
+                timeoutMs,
+              )
+            : null;
+        const providerExecutionId =
+          backfillStatementId ??
+          ddl?.statementId ??
+          resumeEvidence?.statementId;
+        if (!providerExecutionId)
+          throw new Error("Snowflake DDL evidence is unavailable.");
+        return {
+          rowCount,
+          providerExecutionId,
+          verification: {
+            mode: "idempotent_implicit_commit",
+            preconditionRows: preconditionRows.length,
+            ...finalEvidence,
+            ddlStatementId: ddl?.statementId ?? null,
+            ...(backfillStatementId ? { backfillStatementId } : {}),
+            phases: input.backfillSql
+              ? [
+                  input.skipDdl ? "column_already_added" : "column_added",
+                  "backfill_applied",
+                ]
+              : [
+                  input.operation === "rename_column"
+                    ? "renamed"
+                    : "column_added",
+                ],
+          },
+        };
+      } catch (error) {
+        throw snowflakeImplicitDdlOutcome(error, {
+          ddlCompleted,
+          skipDdl: input.skipDdl === true,
+          ddlStatementId,
+        });
+      }
+    });
+  }
+
+  private async executeMutationStatement(
+    sqlText: string,
+    params: QueryParameter[],
+    timeoutMs: number,
+  ): Promise<{ rowCount: number; statementId: string | undefined }> {
+    this.ensureConnected();
+    const connection = this.connection;
+    if (!connection) throw new Error("Snowflake connection not initialized");
+    let active: SnowflakeStatement | undefined;
+    let timer: NodeJS.Timeout | undefined;
+    const operation = new Promise<{
+      rowCount: number;
+      statementId: string | undefined;
+    }>((resolve, reject) => {
+      active = connection.execute({
+        sqlText,
+        binds: params as snowflake.Binds,
+        streamResult: false,
+        complete: (
+          error: SnowflakeError | undefined,
+          statement: SnowflakeStatement,
+        ) => {
+          if (error) reject(new Error("Snowflake controlled mutation failed."));
+          else {
+            resolve({
+              rowCount: statement.getNumUpdatedRows?.() ?? 0,
+              statementId: statement.getStatementId?.(),
+            });
+          }
+        },
+      }) as SnowflakeStatement;
+    });
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        active?.cancel?.(() => undefined);
+        reject(new Error("Snowflake controlled mutation timed out."));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([operation, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+}
+
+export function snowflakeImplicitDdlOutcome(
+  error: unknown,
+  input: {
+    ddlCompleted: boolean;
+    skipDdl: boolean;
+    ddlStatementId: string | undefined;
+  },
+): unknown {
+  if (
+    input.ddlCompleted &&
+    !input.skipDdl &&
+    input.ddlStatementId &&
+    error instanceof Error &&
+    error.name === "SqlChangeStaleError"
+  ) {
+    return new SqlChangePartialCommitError(
+      "Snowflake column DDL committed before the backfill became stale.",
+      input.ddlStatementId,
+      {
+        phase: "partial_ddl_committed",
+        terminal: true,
+        freshApprovalRequired: true,
+        ddlCommitted: true,
+        ddlStatementId: input.ddlStatementId,
+      },
+    );
+  }
+  if (
+    input.ddlCompleted &&
+    error instanceof Error &&
+    error.name !== "SqlChangeStaleError"
+  ) {
+    error.name = "SqlChangeResumeRequiredError";
+  }
+  return error;
 }

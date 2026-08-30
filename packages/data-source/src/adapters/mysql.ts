@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import mysql from "mysql2";
 import type { DataSourceIntrospector } from "../introspection/base.js";
 import { MySQLIntrospector } from "../introspection/mysql.js";
@@ -16,6 +18,21 @@ import {
 import { AsyncMutex } from "./helpers/async-mutex.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { mapMySQLType } from "./type-mappings/mysql.js";
+import {
+  SqlChangePartialCommitError,
+  type ApplyControlledMutationInput,
+  type ApplyControlledMutationResult,
+} from "../mutations/types.js";
+import {
+  assertAffectedRows,
+  assertMutationPreconditions,
+  verifiedRowEvidence,
+} from "../mutations/verify.js";
+import {
+  boundedStructuredMutationSelect,
+  type ApplyStructuredColumnChangeInput,
+  type ApplyStructuredColumnChangeResult,
+} from "../mutations/structured-column-change.js";
 
 /**
  * MySQL database adapter
@@ -59,6 +76,12 @@ export class MySQLAdapter extends BaseAdapter {
         database: mysqlCredentials.default_database,
         user: mysqlCredentials.username,
         password: mysqlCredentials.password,
+        // mysql2 otherwise converts BIGINT values to JavaScript numbers before
+        // the metadata-aware artifact serializer can preserve them. Keep both
+        // signed and unsigned 64-bit integers lossless at the driver boundary.
+        // DECIMAL values remain strings under this configuration as well.
+        supportBigNumbers: true,
+        bigNumberStrings: true,
       };
 
       // Handle SSL configuration
@@ -120,13 +143,13 @@ export class MySQLAdapter extends BaseAdapter {
       await this.ensureUsableConnection();
       if (!this.connection) throw new Error("MySQL connection not initialized");
 
-      await this.executeQuery("START TRANSACTION READ ONLY");
+      await this.executeControlStatement("START TRANSACTION READ ONLY");
       try {
         const result = await this.queryExclusive(sql, params, maxRows, timeout);
-        await this.executeQuery("ROLLBACK");
+        await this.executeControlStatement("ROLLBACK");
         return result;
       } catch (error) {
-        await this.executeQuery("ROLLBACK").catch(() => undefined);
+        await this.executeControlStatement("ROLLBACK").catch(() => undefined);
         throw error;
       }
     });
@@ -234,6 +257,215 @@ export class MySQLAdapter extends BaseAdapter {
     );
   }
 
+  override async applyControlledMutation(
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    return this.queryMutex.runExclusive(async () => {
+      const timeoutMs = resolveQueryTimeout(input.timeout);
+      await this.ensureUsableConnection();
+      if (!this.connection) throw new Error("MySQL connection not initialized");
+      await this.executeControlStatement(
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+      );
+      await this.executeControlStatement("START TRANSACTION");
+      try {
+        const locked = await this.queryExclusive(
+          `${input.preconditionSql} FOR UPDATE`,
+          input.preconditionParams,
+          undefined,
+          timeoutMs,
+        );
+        assertMutationPreconditions(locked.rows, input.expectedRowHashes);
+        const evidence = await this.mysqlExecutionEvidence(timeoutMs);
+        const [changed] = await this.executeWithTimeout(
+          this.executeQuery(input.canonicalSql, input.params),
+          timeoutMs,
+        );
+        const rowCount =
+          changed && typeof changed === "object" && "affectedRows" in changed
+            ? (changed as mysql.ResultSetHeader).affectedRows
+            : 0;
+        assertAffectedRows(rowCount, input.expectedAffectedRows);
+        await this.executeControlStatement("COMMIT");
+        return {
+          rowCount,
+          providerExecutionId: evidence.providerExecutionId,
+          verification: {
+            isolation: "serializable",
+            lockedRows: locked.rows.length,
+            affectedRows: rowCount,
+            providerConnectionId: evidence.connectionId,
+            providerExecutionToken: evidence.executionId,
+            providerStatementHash: mysqlStatementHash(input.canonicalSql),
+          },
+        };
+      } catch (error) {
+        await this.executeControlStatement("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  override async applyStructuredColumnChange(
+    input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult> {
+    return this.queryMutex.runExclusive(async () => {
+      const timeoutMs = resolveQueryTimeout(input.timeout);
+      await this.ensureUsableConnection();
+      let ddlCompleted = input.skipDdl === true;
+      let ddlEvidence:
+        Awaited<ReturnType<MySQLAdapter["mysqlExecutionEvidence"]>> | undefined;
+      try {
+        if (!input.skipDdl) {
+          ddlEvidence = await this.mysqlExecutionEvidence(timeoutMs);
+          await this.executeWithTimeout(
+            this.executeQuery(input.ddlSql),
+            timeoutMs,
+          );
+          ddlCompleted = true;
+        }
+        let rowCount = 0;
+        let preconditionRows: Record<string, unknown>[] = [];
+        let finalEvidence: Record<string, unknown> = {};
+        let evidence: Awaited<
+          ReturnType<MySQLAdapter["mysqlExecutionEvidence"]>
+        >;
+        if (input.backfillSql) {
+          if (!input.preconditionSql || !input.verificationSql) {
+            throw new Error("Stored backfill preconditions are unavailable.");
+          }
+          await this.executeControlStatement("START TRANSACTION");
+          try {
+            preconditionRows = (
+              await this.queryExclusive(
+                `${boundedStructuredMutationSelect(input.preconditionSql, "mysql", input.maximumRows)} FOR UPDATE`,
+                [],
+                undefined,
+                timeoutMs,
+              )
+            ).rows;
+            assertMutationPreconditions(
+              preconditionRows,
+              input.expectedPreconditionRowHashes ?? input.expectedRowHashes,
+            );
+            evidence = await this.mysqlExecutionEvidence(timeoutMs);
+            const [changed] = await this.executeWithTimeout(
+              this.executeQuery(input.backfillSql),
+              timeoutMs,
+            );
+            rowCount =
+              changed &&
+              typeof changed === "object" &&
+              "affectedRows" in changed
+                ? (changed as mysql.ResultSetHeader).affectedRows
+                : 0;
+            assertAffectedRows(rowCount, input.expectedAffectedRows);
+            const verificationRows = (
+              await this.queryExclusive(
+                boundedStructuredMutationSelect(
+                  input.verificationSql,
+                  "mysql",
+                  input.maximumRows,
+                ),
+                [],
+                undefined,
+                timeoutMs,
+              )
+            ).rows;
+            finalEvidence = verifiedRowEvidence(
+              verificationRows,
+              input.expectedRowHashes,
+            );
+            await this.executeControlStatement("COMMIT");
+          } catch (error) {
+            await this.executeControlStatement("ROLLBACK").catch(
+              () => undefined,
+            );
+            throw error;
+          }
+        } else {
+          assertAffectedRows(0, input.expectedAffectedRows);
+          evidence = await this.mysqlExecutionEvidence(timeoutMs);
+        }
+        return {
+          rowCount,
+          providerExecutionId: evidence.providerExecutionId,
+          verification: {
+            mode: "idempotent_implicit_commit",
+            preconditionRows: preconditionRows.length,
+            providerConnectionId: evidence.connectionId,
+            providerExecutionToken: evidence.executionId,
+            approvedDdlStatementHash: mysqlStatementHash(input.ddlSql),
+            providerStatementHash: mysqlStatementHash(
+              executedStructuredStatements(input),
+            ),
+            ...finalEvidence,
+            phases: input.backfillSql
+              ? [
+                  input.skipDdl ? "column_already_added" : "column_added",
+                  "backfill_applied",
+                ]
+              : [
+                  input.operation === "rename_column"
+                    ? "renamed"
+                    : "column_added",
+                ],
+          },
+        };
+      } catch (error) {
+        if (
+          ddlCompleted &&
+          !input.skipDdl &&
+          ddlEvidence &&
+          error instanceof Error &&
+          error.name === "SqlChangeStaleError"
+        ) {
+          throw new SqlChangePartialCommitError(
+            "MySQL column DDL committed before the backfill became stale.",
+            ddlEvidence.providerExecutionId,
+            {
+              phase: "partial_ddl_committed",
+              terminal: true,
+              freshApprovalRequired: true,
+              ddlCommitted: true,
+              providerConnectionId: ddlEvidence.connectionId,
+              providerExecutionToken: ddlEvidence.executionId,
+              providerStatementHash: mysqlStatementHash(input.ddlSql),
+            },
+          );
+        }
+        throw resumableImplicitCommitError(error, ddlCompleted);
+      }
+    });
+  }
+
+  private async mysqlExecutionEvidence(timeoutMs: number): Promise<{
+    providerExecutionId: string;
+    connectionId: string;
+    executionId: string;
+  }> {
+    const [rows] = await this.executeWithTimeout(
+      this.executeQuery(
+        "SELECT CAST(CONNECTION_ID() AS CHAR) AS connection_id, UUID() AS execution_id",
+      ),
+      timeoutMs,
+    );
+    const row = Array.isArray(rows)
+      ? (rows[0] as
+          { connection_id?: unknown; execution_id?: unknown } | undefined)
+      : undefined;
+    const connectionId = String(row?.connection_id ?? "");
+    const executionId = String(row?.execution_id ?? "");
+    if (!connectionId || !executionId) {
+      throw new Error("MySQL execution evidence is unavailable.");
+    }
+    return {
+      providerExecutionId: `mysql:${executionId}`,
+      connectionId,
+      executionId,
+    };
+  }
+
   private async executeWriteExclusive(
     sql: string,
     params?: QueryParameter[],
@@ -291,7 +523,20 @@ export class MySQLAdapter extends BaseAdapter {
     return new Promise((resolve, reject) => {
       connection.execute(sql, params ?? [], (error, result, fields) => {
         if (error) reject(error);
-        else resolve([result, fields]);
+        else resolve([result, fields ?? []]);
+      });
+    });
+  }
+
+  private executeControlStatement(sql: string): Promise<void> {
+    const connection = this.connection;
+    if (!connection)
+      return Promise.reject(new Error("MySQL connection not initialized"));
+
+    return new Promise((resolve, reject) => {
+      connection.query(sql, (error) => {
+        if (error) reject(error);
+        else resolve();
       });
     });
   }
@@ -377,4 +622,51 @@ export class MySQLAdapter extends BaseAdapter {
     this.connected = false;
     connection?.destroy();
   }
+}
+
+function resumableImplicitCommitError(
+  error: unknown,
+  ddlCompleted: boolean,
+): unknown {
+  if (
+    ddlCompleted &&
+    error instanceof Error &&
+    error.name !== "SqlChangeStaleError"
+  ) {
+    error.name = "SqlChangeResumeRequiredError";
+  }
+  return error;
+}
+
+function mysqlStatementHash(sql: string): string {
+  return createHash("sha256").update(sql).digest("hex");
+}
+
+export function executedStructuredStatements(
+  input: Pick<
+    ApplyStructuredColumnChangeInput,
+    | "ddlSql"
+    | "backfillSql"
+    | "preconditionSql"
+    | "verificationSql"
+    | "skipDdl"
+    | "maximumRows"
+  >,
+): string {
+  return [
+    ...(input.skipDdl ? [] : [input.ddlSql]),
+    ...(input.backfillSql && input.preconditionSql && input.verificationSql
+      ? [
+          "START TRANSACTION",
+          `${boundedStructuredMutationSelect(input.preconditionSql, "mysql", input.maximumRows)} FOR UPDATE`,
+          input.backfillSql,
+          boundedStructuredMutationSelect(
+            input.verificationSql,
+            "mysql",
+            input.maximumRows,
+          ),
+          "COMMIT",
+        ]
+      : []),
+  ].join("\n");
 }

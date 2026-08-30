@@ -16,6 +16,8 @@
     "build": "tsc",
     "check-types": "tsc --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts",
+    "test:sql-change-integration": "node --env-file-if-exists=../../.env --import tsx --test test/sql-change-integration.ts",
+    "test:sql-change-cloud": "node --env-file-if-exists=../../.env --import tsx --test test/sql-change-cloud-integration.ts",
     "test:mysql-integration": "bash test/mysql-integration.sh"
   },
   "dependencies": {
@@ -25,7 +27,8 @@
     "node-sql-parser": "^5.3.13",
     "pg": "^8.16.3",
     "pg-cursor": "^2.15.3",
-    "snowflake-sdk": "^2.3.1"
+    "snowflake-sdk": "^2.3.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",

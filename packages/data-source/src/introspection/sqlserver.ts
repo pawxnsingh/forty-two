@@ -371,11 +371,12 @@ export class SQLServerIntrospector extends BaseIntrospector {
         database: this.getString(row.database_name) || "",
         position: this.parseNumber(row.position) || 0,
         dataType: this.getString(row.data_type) || "",
+        physicalType: this.getString(row.data_type),
         isNullable: this.parseBoolean(row.is_nullable),
-        defaultValue: this.getString(row.default_value) || "",
-        maxLength: this.parseNumber(row.max_length) ?? 0,
-        precision: this.parseNumber(row.precision) ?? 0,
-        scale: this.parseNumber(row.scale) ?? 0,
+        defaultValue: this.getString(row.default_value),
+        maxLength: this.parseNumber(row.max_length),
+        precision: this.parseNumber(row.precision),
+        scale: this.parseNumber(row.scale),
       }));
 
       // Only cache if we fetched all columns (no filters)
