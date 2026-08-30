@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "license": "assets/licenses/FONT-LICENSES.md",
+  "fonts": [
+    {
+      "id": "sanchez-400-normal",
+      "family": "Sanchez",
+      "style": "normal",
+      "weight": 400,
+      "source": "https://fonts.gstatic.com/s/sanchez/v17/Ycm2sZJORluHnXbITm4.ttf",
+      "license": "assets/licenses/Sanchez-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/Sanchez-Regular.ttf",
+        "web": "assets/fonts/web/Sanchez-Regular.woff2"
+      },
+      "sha256": {
+        "native": "b3d8f622515266488cdbfa05bfffb98995f8a1071c1892e4e5b73f9492439f9c",
+        "web": "2d941417893befb28cadc12d09da90e8f4974f0f3cf08340c88fbc718162c414"
+      }
+    },
+    {
+      "id": "sanchez-400-italic",
+      "family": "Sanchez",
+      "style": "italic",
+      "weight": 400,
+      "source": "https://fonts.gstatic.com/s/sanchez/v17/Ycm0sZJORluHnXbIfmxR-A.ttf",
+      "license": "assets/licenses/Sanchez-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/Sanchez-Italic.ttf",
+        "web": "assets/fonts/web/Sanchez-Italic.woff2"
+      },
+      "sha256": {
+        "native": "2e763c23be6d203c8f1773f8b7f79ad231ac4a8adf202163466f6e3a484789bb",
+        "web": "5511ca0e7b84fea2b8095b4af9b3d6b7f94742748cffd3ab0eb63a76c1e1a4e5"
+      }
+    },
+    {
+      "id": "league-spartan-400-normal",
+      "family": "League Spartan",
+      "style": "normal",
+      "weight": 400,
+      "source": "https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvM_oTpBA.ttf",
+      "license": "assets/licenses/LeagueSpartan-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/LeagueSpartan-Regular.ttf",
+        "web": "assets/fonts/web/LeagueSpartan-Regular.woff2"
+      },
+      "sha256": {
+        "native": "481a921fc3cae128a38c84e758613e7016c04fcc528c2c28933b563454f7de3c",
+        "web": "7d843a9fa4dcd050da68405d9093f8ab8298f8f60a97155e85ab84c9ed3040e2"
+      }
+    },
+    {
+      "id": "league-spartan-500-normal",
+      "family": "League Spartan",
+      "style": "normal",
+      "weight": 500,
+      "source": "https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMzITpBA.ttf",
+      "license": "assets/licenses/LeagueSpartan-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/LeagueSpartan-Medium.ttf",
+        "web": "assets/fonts/web/LeagueSpartan-Medium.woff2"
+      },
+      "sha256": {
+        "native": "5c835851a640c3bdd342cdbc6aa476fe2d79a22259d2c0f1f6b3ca24c37947d8",
+        "web": "7d843a9fa4dcd050da68405d9093f8ab8298f8f60a97155e85ab84c9ed3040e2"
+      }
+    },
+    {
+      "id": "league-spartan-600-normal",
+      "family": "League Spartan",
+      "style": "normal",
+      "weight": 600,
+      "source": "https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMIIPpBA.ttf",
+      "license": "assets/licenses/LeagueSpartan-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/LeagueSpartan-SemiBold.ttf",
+        "web": "assets/fonts/web/LeagueSpartan-SemiBold.woff2"
+      },
+      "sha256": {
+        "native": "1bf8430ab8bc0db7f7e5ddfcb84a870ec113f8ef8e3942b10c28de1f107b60c8",
+        "web": "7d843a9fa4dcd050da68405d9093f8ab8298f8f60a97155e85ab84c9ed3040e2"
+      }
+    },
+    {
+      "id": "league-spartan-700-normal",
+      "family": "League Spartan",
+      "style": "normal",
+      "weight": 700,
+      "source": "https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMGYPpBA.ttf",
+      "license": "assets/licenses/LeagueSpartan-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/LeagueSpartan-Bold.ttf",
+        "web": "assets/fonts/web/LeagueSpartan-Bold.woff2"
+      },
+      "sha256": {
+        "native": "7c2c16ebb666235be195d08524cb10495d56b153fffab04d608155b609bc239c",
+        "web": "7d843a9fa4dcd050da68405d9093f8ab8298f8f60a97155e85ab84c9ed3040e2"
+      }
+    },
+    {
+      "id": "jetbrains-mono-400-normal",
+      "family": "JetBrains Mono",
+      "style": "normal",
+      "weight": 400,
+      "source": "https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ.ttf",
+      "license": "assets/licenses/JetBrainsMono-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/JetBrainsMono-Regular.ttf",
+        "web": "assets/fonts/web/JetBrainsMono-Regular.woff2"
+      },
+      "sha256": {
+        "native": "44ce4a84f20d60f24539bd0cef11f79c29e38609e0f8adf18551c9794a5d9dc3",
+        "web": "83c005d49d8a6a50474c73a5a36ac0468076e9c4a29da7bdb14995d80560a5be"
+      }
+    },
+    {
+      "id": "jetbrains-mono-500-normal",
+      "family": "JetBrains Mono",
+      "style": "normal",
+      "weight": 500,
+      "source": "https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8-qxjPQ.ttf",
+      "license": "assets/licenses/JetBrainsMono-OFL-1.1.txt",
+      "files": {
+        "native": "assets/fonts/native/JetBrainsMono-Medium.ttf",
+        "web": "assets/fonts/web/JetBrainsMono-Medium.woff2"
+      },
+      "sha256": {
+        "native": "3386a05f6ece969e4537de6be894170d20558e82f7d56c8c5d332972ef172160",
+        "web": "83c005d49d8a6a50474c73a5a36ac0468076e9c4a29da7bdb14995d80560a5be"
+      }
+    }
+  ]
+}

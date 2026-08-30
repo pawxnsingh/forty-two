@@ -1,0 +1,76 @@
+{
+  "name": "@repo/ui-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Accessible, token-governed web UI primitives for Forty Two.",
+  "sideEffects": [
+    "./src/nova.css"
+  ],
+  "files": [
+    "src",
+    "LICENSE.shadcn-ui"
+  ],
+  "dependencies": {
+    "@repo/design-tokens": "workspace:*",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.28.0",
+    "recharts": "3.9.1",
+    "tailwindcss": "4.3.3",
+    "tailwind-merge": "3.6.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./button": "./src/button.tsx",
+    "./charts": "./src/charts/index.ts",
+    "./checkbox": "./src/checkbox.tsx",
+    "./collapsible": "./src/collapsible.tsx",
+    "./data-table": "./src/data-table.tsx",
+    "./dialog": "./src/dialog.tsx",
+    "./drop-zone": "./src/drop-zone.tsx",
+    "./dropdown-menu": "./src/dropdown-menu.tsx",
+    "./input": "./src/input.tsx",
+    "./nova.css": "./src/nova.css",
+    "./number-field": "./src/number-field.tsx",
+    "./progress-bar": "./src/progress-bar.tsx",
+    "./radio-group": "./src/radio-group.tsx",
+    "./select": "./src/select.tsx",
+    "./separator": "./src/separator.tsx",
+    "./sheet": "./src/sheet.tsx",
+    "./sidebar": "./src/sidebar.tsx",
+    "./skeleton": "./src/skeleton.tsx",
+    "./text-field": "./src/text-field.tsx",
+    "./toast": "./src/toast.tsx",
+    "./tooltip": "./src/tooltip.tsx",
+    "./use-mobile": "./src/use-mobile.ts",
+    "./utils": "./src/cn.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": "19.2.8",
+    "react-aria-components": "1.20.0",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.0.4",
+    "eslint": "9.39.1",
+    "jsdom": "30.0.0",
+    "react": "19.2.8",
+    "react-aria-components": "1.20.0",
+    "react-dom": "19.2.8",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}
