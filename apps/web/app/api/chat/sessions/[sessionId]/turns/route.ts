@@ -1,7 +1,7 @@
 import {
   ApiInputError,
   apiError,
-  beginQuestion,
+  createApplicationTurn,
   readTurnInput,
   trueForgeClient,
   trueforgeSessionId,
@@ -52,10 +52,10 @@ export async function POST(
     const { sessionId } = await context.params;
     const userMessage = await readTurnInput(request);
     const safeSessionId = validId(sessionId, "session id");
-    await beginQuestion(safeSessionId, request);
-    const turn = await trueForgeClient().sessions.createTurn(
-      await trueforgeSessionId(safeSessionId),
-      { input: [userMessage] },
+    const turn = await createApplicationTurn(
+      safeSessionId,
+      userMessage,
+      request,
     );
     return Response.json(
       { ...turn, data: { ...turn.data, sessionId: safeSessionId } },

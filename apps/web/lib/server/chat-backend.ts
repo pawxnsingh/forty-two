@@ -6,29 +6,37 @@ import {
 import {
   activateChatSession,
   beginChatSessionQuestion,
+  ChatTurnRequestConflictError,
+  ChatTurnRequestUnavailableError,
   ChatSessionDataSourceLimitError,
   ChatSessionDataSourceUnavailableError,
   ChatSessionIdempotencyConflictError,
+  completeChatTurnRequest,
   createChatSession,
   failChatSession,
   getChatSession,
   getChatSessionForCleanup,
+  getChatTurnRequest,
   listChatSessionDataSources,
+  markChatTurnRequestIndeterminate,
   mintArtifactBrowserCapability,
   recordSqlChangeApproval,
+  reserveChatTurnRequest,
   softDeleteChatSession,
   SqlChangeConflictError,
   SqlChangeReplayError,
   type ChatSession,
+  type ChatTurnRequest,
   type DataSourceId,
 } from "@forty-two/db";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
 const MAX_MESSAGE_CHARS = 20_000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/;
 const TERMINAL_TURN_STATES = new Set(["done", "error", "cancelled"]);
 export const SHARED_DATA_SOURCE_MCP_NAME = "forty-two-data-source";
+type TextUserMessage = TrueForgeApi.UserMessage & { content: string };
 
 let client: TrueForge | undefined;
 const approvalContinuations = new Map<
@@ -41,6 +49,8 @@ const approvalContinuations = new Map<
 >();
 const APPROVAL_CONTINUATION_TTL_MS = 10 * 60_000;
 const MAX_APPROVAL_CONTINUATIONS = 1_000;
+const TURN_REQUEST_WAIT_ATTEMPTS = 100;
+const TURN_REQUEST_WAIT_INTERVAL_MS = 50;
 
 export class ApiInputError extends Error {
   readonly status: number;
@@ -158,19 +168,162 @@ export async function trueforgeSessionId(
   return (await applicationSession(applicationSessionId)).trueforgeSessionId!;
 }
 
-export async function beginQuestion(
+export interface ApplicationTurnDependencies {
+  reserve(input: {
+    chatSessionId: string;
+    idempotencyKey: string;
+    requestHash: string;
+  }): Promise<{ request: ChatTurnRequest; reserved: boolean }>;
+  get(input: {
+    chatSessionId: string;
+    idempotencyKey: string;
+  }): Promise<ChatTurnRequest | null>;
+  complete(input: {
+    chatSessionId: string;
+    idempotencyKey: string;
+    requestHash: string;
+    trueforgeTurnId: string;
+  }): Promise<ChatTurnRequest>;
+  markIndeterminate(input: {
+    chatSessionId: string;
+    idempotencyKey: string;
+    requestHash: string;
+  }): Promise<ChatTurnRequest>;
+  beginQuestion(input: {
+    chatSessionId: string;
+    questionKey: string;
+  }): Promise<unknown>;
+  trueforgeSessionId(applicationSessionId: string): Promise<string>;
+  createTurn(
+    trueforgeSessionId: string,
+    userMessage: TextUserMessage,
+  ): Promise<TrueForgeApi.GetTurnResponse>;
+  getTurn(
+    trueforgeSessionId: string,
+    trueforgeTurnId: string,
+  ): Promise<TrueForgeApi.GetTurnResponse>;
+  wait(milliseconds: number): Promise<void>;
+}
+
+export interface TurnCreationClient {
+  createTurn(
+    sessionId: string,
+    request: { input: TextUserMessage[] },
+    options: { maxRetries: number },
+  ): Promise<TrueForgeApi.GetTurnResponse>;
+}
+
+export function createTrueForgeTurnOnce(
+  sessions: TurnCreationClient,
+  sessionId: string,
+  userMessage: TextUserMessage,
+): Promise<TrueForgeApi.GetTurnResponse> {
+  return sessions.createTurn(
+    sessionId,
+    { input: [userMessage] },
+    { maxRetries: 0 },
+  );
+}
+
+const defaultApplicationTurnDependencies: ApplicationTurnDependencies = {
+  reserve: reserveChatTurnRequest,
+  get: getChatTurnRequest,
+  complete: completeChatTurnRequest,
+  markIndeterminate: markChatTurnRequestIndeterminate,
+  beginQuestion: beginChatSessionQuestion,
+  trueforgeSessionId,
+  createTurn: (sessionId, userMessage) =>
+    createTrueForgeTurnOnce(trueForgeClient().sessions, sessionId, userMessage),
+  getTurn: (sessionId, turnId) =>
+    trueForgeClient().sessions.getTurn(sessionId, turnId),
+  wait: delay,
+};
+
+export async function createApplicationTurn(
   applicationSessionId: string,
+  userMessage: TextUserMessage,
   request: Request,
-): Promise<void> {
-  const questionKey =
-    request.headers.get("idempotency-key")?.trim() || randomUUID();
-  if (questionKey.length > 255) {
-    throw new ApiInputError("Idempotency-Key exceeds 255 characters.");
+  dependencies: ApplicationTurnDependencies = defaultApplicationTurnDependencies,
+): Promise<TrueForgeApi.GetTurnResponse> {
+  const idempotencyKey = optionalIdempotencyKey(request);
+  if (!idempotencyKey) {
+    await dependencies.beginQuestion({
+      chatSessionId: applicationSessionId,
+      questionKey: randomUUID(),
+    });
+    return dependencies.createTurn(
+      await dependencies.trueforgeSessionId(applicationSessionId),
+      userMessage,
+    );
   }
-  await beginChatSessionQuestion({
+
+  const requestHash = createHash("sha256")
+    .update(userMessage.content, "utf8")
+    .digest("hex");
+  const identity = {
     chatSessionId: applicationSessionId,
-    questionKey,
-  });
+    idempotencyKey,
+    requestHash,
+  };
+  const reservation = await dependencies.reserve(identity);
+
+  if (!reservation.reserved) {
+    const settled = await waitForTurnRequest(
+      reservation.request,
+      identity,
+      dependencies,
+    );
+    const trueforgeSession =
+      await dependencies.trueforgeSessionId(applicationSessionId);
+    return dependencies.getTurn(trueforgeSession, settled.trueforgeTurnId!);
+  }
+
+  try {
+    const trueforgeSession =
+      await dependencies.trueforgeSessionId(applicationSessionId);
+    await dependencies.beginQuestion({
+      chatSessionId: applicationSessionId,
+      questionKey: idempotencyKey,
+    });
+    const turn = await dependencies.createTurn(trueforgeSession, userMessage);
+    const trueforgeTurnId = validId(turn.data.id, "turn id");
+    await dependencies.complete({ ...identity, trueforgeTurnId });
+    return turn;
+  } catch (error) {
+    await dependencies.markIndeterminate(identity).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function waitForTurnRequest(
+  initial: ChatTurnRequest,
+  identity: {
+    chatSessionId: string;
+    idempotencyKey: string;
+    requestHash: string;
+  },
+  dependencies: ApplicationTurnDependencies,
+): Promise<ChatTurnRequest> {
+  let current: ChatTurnRequest | null = initial;
+  for (let attempt = 0; attempt <= TURN_REQUEST_WAIT_ATTEMPTS; attempt += 1) {
+    if (current?.requestHash !== identity.requestHash) {
+      throw new ChatTurnRequestConflictError();
+    }
+    if (current.state === "created" && current.trueforgeTurnId) return current;
+    if (current.state === "indeterminate") {
+      throw new ApiInputError(
+        "The prior turn request has an indeterminate outcome and will not be retried automatically.",
+        409,
+      );
+    }
+    if (attempt === TURN_REQUEST_WAIT_ATTEMPTS) break;
+    await dependencies.wait(TURN_REQUEST_WAIT_INTERVAL_MS);
+    current = await dependencies.get(identity);
+  }
+  throw new ApiInputError(
+    "The matching turn request is still being created; retry later with the same Idempotency-Key.",
+    503,
+  );
 }
 
 export async function deleteApplicationSession(
@@ -243,7 +396,7 @@ export function validId(value: string, label: string): string {
 
 export async function readTurnInput(
   request: Request,
-): Promise<TrueForgeApi.UserMessage> {
+): Promise<TextUserMessage> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.startsWith("application/json")) {
     const body = await request.json().catch(() => {
@@ -916,6 +1069,18 @@ export function apiError(error: unknown): Response {
     return Response.json(
       { error: { message: error.message } },
       { status: 409 },
+    );
+  }
+  if (error instanceof ChatTurnRequestConflictError) {
+    return Response.json(
+      { error: { message: error.message } },
+      { status: 409 },
+    );
+  }
+  if (error instanceof ChatTurnRequestUnavailableError) {
+    return Response.json(
+      { error: { message: error.message } },
+      { status: 404 },
     );
   }
   if (

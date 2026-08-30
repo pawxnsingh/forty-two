@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ChatSession } from "@forty-two/db";
+import {
+  ChatTurnRequestConflictError,
+  type ChatSession,
+  type ChatTurnRequest,
+} from "@forty-two/db";
 import { TrueForgeError } from "@truefoundry/trueforge-sdk";
 
 import {
   ApiInputError,
+  createApplicationTurn,
+  createTrueForgeTurnOnce,
   createApplicationSession,
   deleteApplicationSession,
   deleteSessionResources,
@@ -14,8 +20,33 @@ import {
   settledExistingApplicationSession,
   sqlApplyApprovalArguments,
   type ApplicationSessionCleanupDependencies,
+  type ApplicationTurnDependencies,
   type TrueForgeSessionCleanupDependencies,
 } from "./chat-backend";
+
+const applicationSessionId = "sess_01HZX000000000000000000001";
+
+function turnRequest(
+  overrides: Partial<ChatTurnRequest> = {},
+): ChatTurnRequest {
+  const now = new Date();
+  return {
+    chatSessionId: applicationSessionId,
+    idempotencyKey: "turn-key",
+    requestHash: "a".repeat(64),
+    state: "creating",
+    trueforgeTurnId: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function turnResponse(id: string) {
+  return { data: { id } } as Awaited<
+    ReturnType<ApplicationTurnDependencies["createTurn"]>
+  >;
+}
 
 const approvalInput = {
   changeSetId: "change_01HZX000000000000000000001",
@@ -228,6 +259,23 @@ test("turns accept JSON messages only", async () => {
   );
 });
 
+test("turn creation disables SDK transport retries for the non-idempotent POST", async () => {
+  let observedOptions: { maxRetries: number } | undefined;
+  const response = turnResponse("turn-once");
+  const returned = await createTrueForgeTurnOnce(
+    {
+      createTurn: async (_sessionId, _request, options) => {
+        observedOptions = options;
+        return response;
+      },
+    },
+    "trueforge-session",
+    { type: "user.message", content: "Analyze this" },
+  );
+  assert.equal(returned, response);
+  assert.deepEqual(observedOptions, { maxRetries: 0 });
+});
+
 test("turn JSON rejects empty and oversized messages", async () => {
   for (const message of ["   ", "x".repeat(20_001)]) {
     await assert.rejects(
@@ -241,6 +289,262 @@ test("turn JSON rejects empty and oversized messages", async () => {
       ApiInputError,
     );
   }
+});
+
+test("turn retries return the durable existing turn without another side effect", async () => {
+  let stored: ChatTurnRequest | null = null;
+  let createCalls = 0;
+  let getCalls = 0;
+  let beginCalls = 0;
+  const dependencies: ApplicationTurnDependencies = {
+    reserve: async (input) => {
+      if (stored) {
+        if (stored.requestHash !== input.requestHash) {
+          throw new ChatTurnRequestConflictError();
+        }
+        return { request: stored, reserved: false };
+      }
+      stored = turnRequest({
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+      });
+      return { request: stored, reserved: true };
+    },
+    get: async () => stored,
+    complete: async (input) => {
+      stored = {
+        ...stored!,
+        state: "created",
+        trueforgeTurnId: input.trueforgeTurnId,
+      };
+      return stored;
+    },
+    markIndeterminate: async () => {
+      stored = { ...stored!, state: "indeterminate" };
+      return stored;
+    },
+    beginQuestion: async () => {
+      beginCalls += 1;
+    },
+    trueforgeSessionId: async () => "trueforge-session",
+    createTurn: async () => {
+      createCalls += 1;
+      return turnResponse("turn-one");
+    },
+    getTurn: async (_sessionId, turnId) => {
+      getCalls += 1;
+      return turnResponse(turnId);
+    },
+    wait: async () => undefined,
+  };
+  const request = new Request("http://localhost/turns", {
+    headers: { "Idempotency-Key": "turn-key" },
+  });
+  const message = { type: "user.message", content: "Analyze this" } as const;
+
+  const first = await createApplicationTurn(
+    applicationSessionId,
+    message,
+    request,
+    dependencies,
+  );
+  const retry = await createApplicationTurn(
+    applicationSessionId,
+    message,
+    request,
+    dependencies,
+  );
+
+  assert.equal(first.data.id, "turn-one");
+  assert.equal(retry.data.id, "turn-one");
+  assert.equal(createCalls, 1);
+  assert.equal(getCalls, 1);
+  assert.equal(beginCalls, 1);
+});
+
+test("concurrent turn retries single-flight through the durable reservation", async () => {
+  let stored: ChatTurnRequest | null = null;
+  let createCalls = 0;
+  let releaseCreate!: () => void;
+  let settleWait!: () => void;
+  const createBlocked = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  const requestSettled = new Promise<void>((resolve) => {
+    settleWait = resolve;
+  });
+  const dependencies: ApplicationTurnDependencies = {
+    reserve: async (input) => {
+      if (stored) return { request: stored, reserved: false };
+      stored = turnRequest({
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+      });
+      return { request: stored, reserved: true };
+    },
+    get: async () => stored,
+    complete: async (input) => {
+      stored = {
+        ...stored!,
+        state: "created",
+        trueforgeTurnId: input.trueforgeTurnId,
+      };
+      settleWait();
+      return stored;
+    },
+    markIndeterminate: async () => {
+      stored = { ...stored!, state: "indeterminate" };
+      settleWait();
+      return stored;
+    },
+    beginQuestion: async () => undefined,
+    trueforgeSessionId: async () => "trueforge-session",
+    createTurn: async () => {
+      createCalls += 1;
+      await createBlocked;
+      return turnResponse("turn-concurrent");
+    },
+    getTurn: async (_sessionId, turnId) => turnResponse(turnId),
+    wait: async () => requestSettled,
+  };
+  const request = new Request("http://localhost/turns", {
+    headers: { "Idempotency-Key": "turn-key" },
+  });
+  const message = { type: "user.message", content: "Analyze this" } as const;
+
+  const first = createApplicationTurn(
+    applicationSessionId,
+    message,
+    request,
+    dependencies,
+  );
+  while (createCalls === 0) await Promise.resolve();
+  const retry = createApplicationTurn(
+    applicationSessionId,
+    message,
+    request,
+    dependencies,
+  );
+  releaseCreate();
+
+  const [firstResult, retryResult] = await Promise.all([first, retry]);
+  assert.equal(firstResult.data.id, "turn-concurrent");
+  assert.equal(retryResult.data.id, "turn-concurrent");
+  assert.equal(createCalls, 1);
+});
+
+test("turn idempotency rejects message drift and ambiguous retries", async () => {
+  let stored: ChatTurnRequest | null = null;
+  let createCalls = 0;
+  const dependencies: ApplicationTurnDependencies = {
+    reserve: async (input) => {
+      if (stored) {
+        if (stored.requestHash !== input.requestHash) {
+          throw new ChatTurnRequestConflictError();
+        }
+        return { request: stored, reserved: false };
+      }
+      stored = turnRequest({
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+      });
+      return { request: stored, reserved: true };
+    },
+    get: async () => stored,
+    complete: async () => {
+      throw new Error("unexpected completion");
+    },
+    markIndeterminate: async () => {
+      stored = { ...stored!, state: "indeterminate" };
+      return stored;
+    },
+    beginQuestion: async () => undefined,
+    trueforgeSessionId: async () => "trueforge-session",
+    createTurn: async () => {
+      createCalls += 1;
+      throw new Error("connection lost after request submission");
+    },
+    getTurn: async () => {
+      throw new Error("unexpected get");
+    },
+    wait: async () => undefined,
+  };
+  const request = new Request("http://localhost/turns", {
+    headers: { "Idempotency-Key": "turn-key" },
+  });
+  await assert.rejects(
+    createApplicationTurn(
+      applicationSessionId,
+      { type: "user.message", content: "Analyze this" },
+      request,
+      dependencies,
+    ),
+    /connection lost/,
+  );
+  await assert.rejects(
+    createApplicationTurn(
+      applicationSessionId,
+      { type: "user.message", content: "Analyze this" },
+      request,
+      dependencies,
+    ),
+    (error: unknown) => error instanceof ApiInputError && error.status === 409,
+  );
+  await assert.rejects(
+    createApplicationTurn(
+      applicationSessionId,
+      { type: "user.message", content: "Different message" },
+      request,
+      dependencies,
+    ),
+    ChatTurnRequestConflictError,
+  );
+  assert.equal(createCalls, 1);
+});
+
+test("turn requests without an idempotency key remain distinct", async () => {
+  let createCalls = 0;
+  let beginCalls = 0;
+  const dependencies = {
+    reserve: async () => {
+      throw new Error("unexpected reserve");
+    },
+    get: async () => null,
+    complete: async () => {
+      throw new Error("unexpected complete");
+    },
+    markIndeterminate: async () => {
+      throw new Error("unexpected indeterminate");
+    },
+    beginQuestion: async () => {
+      beginCalls += 1;
+    },
+    trueforgeSessionId: async () => "trueforge-session",
+    createTurn: async () => turnResponse(`turn-${++createCalls}`),
+    getTurn: async () => {
+      throw new Error("unexpected get");
+    },
+    wait: async () => undefined,
+  } satisfies ApplicationTurnDependencies;
+  const request = new Request("http://localhost/turns");
+  const message = { type: "user.message", content: "Analyze this" } as const;
+
+  const first = await createApplicationTurn(
+    applicationSessionId,
+    message,
+    request,
+    dependencies,
+  );
+  const second = await createApplicationTurn(
+    applicationSessionId,
+    message,
+    request,
+    dependencies,
+  );
+
+  assert.equal(first.data.id, "turn-1");
+  assert.equal(second.data.id, "turn-2");
+  assert.equal(beginCalls, 2);
 });
 
 test("public session creation rejects raw AgentSpecs and connector names", async () => {
