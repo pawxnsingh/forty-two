@@ -362,11 +362,21 @@ function buildPreconditionSql(
       value,
     ]),
   );
+  const insertColumns = Object.keys(parsed.insertValues ?? {}).map((column) =>
+    column.toLowerCase(),
+  );
   return `SELECT * FROM ${target.sql} WHERE ${primaryKeys
-    .map(
-      (key) =>
-        `${quoteIdentifier(key, parsed.dialect)} = ${sqlLiteral(values.get(key.toLowerCase()) ?? null, parsed.dialect)}`,
-    )
+    .map((key) => {
+      const normalizedKey = key.toLowerCase();
+      const value = values.get(normalizedKey) ?? null;
+      const parameter =
+        parsed.boundParameters[insertColumns.indexOf(normalizedKey)];
+      return `${quoteIdentifier(key, parsed.dialect)} = ${sqlLiteral(
+        value,
+        parsed.dialect,
+        parameter?.type === "number" && typeof value === "string",
+      )}`;
+    })
     .join(" AND ")}`;
 }
 
@@ -581,8 +591,21 @@ function quoteIdentifier(value: string, dialect: SqlChangeDialect): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function sqlLiteral(value: QueryParameter, dialect: SqlChangeDialect): string {
+function sqlLiteral(
+  value: QueryParameter,
+  dialect: SqlChangeDialect,
+  exactNumeric = false,
+): string {
   if (value === null) return "NULL";
+  if (exactNumeric) {
+    if (
+      typeof value !== "string" ||
+      !/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value)
+    ) {
+      throw new Error("Exact numeric literal evidence is invalid.");
+    }
+    return value;
+  }
   if (typeof value === "boolean") {
     return dialect === "transactsql" || dialect === "mysql"
       ? value

@@ -12,7 +12,12 @@ import type {
 
 const { Parser } = pkg;
 
-type SqlLiteral = null | boolean | number | string;
+type ExactNumericLiteral = {
+  kind: "exact_numeric";
+  value: string;
+};
+
+type SqlLiteral = null | boolean | number | string | ExactNumericLiteral;
 
 const DIALECTS: Record<SqlChangeDialect, string> = {
   postgresql: "postgresql",
@@ -33,13 +38,15 @@ export function parseSqlChange(
   const source = canonicalizeSource(sql);
   const lexical = parseLexical(source);
   validateWithDialectParser(source, dialect, lexical);
-  const boundParameters = collectLiterals(source).map((value, index) => ({
+  const boundParameters = collectLiterals(source).map((literal, index) => ({
     position: index + 1,
     type:
-      value === null
+      literal === null
         ? ("null" as const)
-        : (typeof value as "boolean" | "number" | "string"),
-    value,
+        : isExactNumericLiteral(literal)
+          ? ("number" as const)
+          : (typeof literal as "boolean" | "number" | "string"),
+    value: literalValue(literal),
   }));
   return {
     dialect,
@@ -130,7 +137,9 @@ function parseLexical(sql: string): LexicalChange {
   ).exec(sql);
   if (insert) {
     const columns = splitCommaList(insert[2]!).map(parseSimpleIdentifier);
-    const values = splitCommaList(insert[3]!).map(parseLiteral);
+    const values = splitCommaList(insert[3]!).map((value) =>
+      literalValue(parseLiteral(value)),
+    );
     if (columns.length === 0 || columns.length !== values.length) {
       throw new Error("INSERT requires one explicit literal value per column.");
     }
@@ -165,7 +174,7 @@ function parseLexical(sql: string): LexicalChange {
           throw new Error("UPDATE assignments must set literal values.");
         return [
           parseSimpleIdentifier(match[1]!),
-          parseLiteral(match[2]!),
+          literalValue(parseLiteral(match[2]!)),
         ] as const;
       }),
     );
@@ -298,6 +307,9 @@ function parseLiteral(value: string): SqlLiteral {
     const number = Number(trimmed);
     if (!Number.isFinite(number))
       throw new Error("Numeric literal is out of range.");
+    if (Number.isInteger(number) && !Number.isSafeInteger(number)) {
+      return { kind: "exact_numeric", value: trimmed };
+    }
     return number;
   }
   if (/^'(?:[^']|'')*'$/.test(trimmed)) {
@@ -306,6 +318,21 @@ function parseLiteral(value: string): SqlLiteral {
   throw new Error(
     "Only NULL, boolean, finite number, and quoted string literals are supported.",
   );
+}
+
+function isExactNumericLiteral(
+  value: SqlLiteral,
+): value is ExactNumericLiteral {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    value.kind === "exact_numeric"
+  );
+}
+
+function literalValue(value: SqlLiteral): null | boolean | number | string {
+  return isExactNumericLiteral(value) ? value.value : value;
 }
 
 function collectLiterals(source: string): SqlLiteral[] {

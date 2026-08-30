@@ -158,6 +158,31 @@ test("numeric literal scanning consumes maximal tokens in every dialect", () => 
   }
 });
 
+test("preserves unsafe integer literals exactly in approval evidence", () => {
+  for (const dialect of DIALECTS) {
+    const update = parseSqlChange(
+      "UPDATE inventory SET quantity = 9007199254740993 WHERE id = 9007199254740995",
+      dialect,
+    );
+    assert.equal(update.assignments.quantity, "9007199254740993", dialect);
+    assert.deepEqual(
+      update.boundParameters.map(({ type, value }) => ({ type, value })),
+      [
+        { type: "number", value: "9007199254740993" },
+        { type: "number", value: "9007199254740995" },
+      ],
+      dialect,
+    );
+
+    const insertion = parseSqlChange(
+      "INSERT INTO inventory (id, quantity) VALUES (9007199254740993, 1)",
+      dialect,
+    );
+    assert.equal(insertion.insertValues?.id, "9007199254740993", dialect);
+    assert.equal(insertion.canonicalSql.includes("9007199254740993"), true);
+  }
+});
+
 test("fails closed for unbounded, multi-statement, computed, and arbitrary DDL", () => {
   for (const dialect of DIALECTS) {
     for (const sql of [
