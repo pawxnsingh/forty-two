@@ -221,6 +221,14 @@ export const ChartArtifactEnvelopeV1Schema = z
   })
   .strict()
   .superRefine((envelope, context) => {
+    const names = envelope.columns.map((column) => column.name);
+    if (new Set(names).size !== names.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["columns"],
+        message: "Chart columns must have unique names",
+      });
+    }
     if (envelope.data.length !== envelope.rowCount) {
       context.addIssue({
         code: "custom",
@@ -228,6 +236,43 @@ export const ChartArtifactEnvelopeV1Schema = z
         message: "Chart data length must equal rowCount",
       });
     }
+    try {
+      validateChartConfigV1({
+        config: envelope.config,
+        columns: envelope.columns,
+        rowCount: envelope.rowCount,
+      });
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        path: ["config"],
+        message:
+          error instanceof Error ? error.message : "Chart config is invalid",
+      });
+    }
+    envelope.data.forEach((row, rowIndex) => {
+      const keys = Object.keys(row);
+      if (
+        keys.length !== names.length ||
+        keys.some((key) => !names.includes(key))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["data", rowIndex],
+          message: "Chart row does not match the declared columns",
+        });
+        return;
+      }
+      envelope.columns.forEach((column) => {
+        if (!chartCellMatchesColumn(row[column.name], column)) {
+          context.addIssue({
+            code: "custom",
+            path: ["data", rowIndex, column.name],
+            message: "Chart cell does not match its declared column",
+          });
+        }
+      });
+    });
   });
 
 export type ChartConfigV1 = z.infer<typeof ChartConfigV1Schema>;
@@ -237,7 +282,10 @@ export type ChartArtifactEnvelopeV1 = z.infer<
 
 const NUMERIC_TYPES = new Set(["number", "integer", "decimal"]);
 
-function referencedColumns(config: ChartConfigV1): {
+function referencedColumns(
+  config: ChartConfigV1,
+  suppliedFields: ReadonlySet<string>,
+): {
   all: string[];
   numeric: string[];
 } {
@@ -260,35 +308,52 @@ function referencedColumns(config: ChartConfigV1): {
     true,
   );
 
+  if (
+    config.selectedChartType === "scatter" ||
+    suppliedFields.has("scatterAxis")
+  ) {
+    const axis = config.scatterAxis;
+    add(axis?.x, true);
+    add(axis?.y, true);
+    add(axis?.category);
+    add(axis?.size, true);
+    add(axis?.tooltip);
+  }
+  if (
+    config.selectedChartType === "bar" ||
+    config.selectedChartType === "line" ||
+    suppliedFields.has("barAndLineAxis")
+  ) {
+    const axis = config.barAndLineAxis;
+    add(axis?.x);
+    add(axis?.y, true);
+    add(axis?.category);
+    add(axis?.colorBy);
+    add(axis?.tooltip);
+  }
+  if (
+    config.selectedChartType === "pie" ||
+    suppliedFields.has("pieChartAxis")
+  ) {
+    const axis = config.pieChartAxis;
+    add(axis?.x);
+    add(axis?.y, true);
+    add(axis?.tooltip);
+  }
+  if (
+    config.selectedChartType === "combo" ||
+    suppliedFields.has("comboChartAxis")
+  ) {
+    const axis = config.comboChartAxis;
+    add(axis?.x);
+    add(axis?.y, true);
+    add(axis?.y2, true);
+    add(axis?.category);
+    add(axis?.colorBy);
+    add(axis?.tooltip);
+  }
+
   switch (config.selectedChartType) {
-    case "scatter":
-      add(config.scatterAxis.x, true);
-      add(config.scatterAxis.y, true);
-      add(config.scatterAxis.category);
-      add(config.scatterAxis.size, true);
-      add(config.scatterAxis.tooltip);
-      break;
-    case "bar":
-    case "line":
-      add(config.barAndLineAxis.x);
-      add(config.barAndLineAxis.y, true);
-      add(config.barAndLineAxis.category);
-      add(config.barAndLineAxis.colorBy);
-      add(config.barAndLineAxis.tooltip);
-      break;
-    case "pie":
-      add(config.pieChartAxis.x);
-      add(config.pieChartAxis.y, true);
-      add(config.pieChartAxis.tooltip);
-      break;
-    case "combo":
-      add(config.comboChartAxis.x);
-      add(config.comboChartAxis.y, true);
-      add(config.comboChartAxis.y2, true);
-      add(config.comboChartAxis.category);
-      add(config.comboChartAxis.colorBy);
-      add(config.comboChartAxis.tooltip);
-      break;
     case "metric":
       add([config.metricColumnId], true);
       add(config.metricTrendColumnId ? [config.metricTrendColumnId] : []);
@@ -304,21 +369,60 @@ function referencedColumns(config: ChartConfigV1): {
   return { all: [...all], numeric: [...numeric] };
 }
 
+function chartCellMatchesColumn(
+  value: unknown,
+  column: z.infer<typeof ChartArtifactColumnV1Schema>,
+): boolean {
+  if (value === null) return column.nullable;
+  switch (column.type) {
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "integer":
+      return column.encoding === "string"
+        ? typeof value === "string" && /^-?\d+$/.test(value)
+        : typeof value === "number" && Number.isSafeInteger(value);
+    case "decimal":
+      return (
+        typeof value === "string" &&
+        /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)
+      );
+    case "boolean":
+      return typeof value === "boolean";
+    case "datetime":
+      return typeof value === "string" && Number.isFinite(Date.parse(value));
+    case "json":
+      return true;
+  }
+}
+
 export function validateChartConfigV1(input: {
   config: unknown;
   columns: z.infer<typeof ChartArtifactColumnV1Schema>[];
   rowCount: number;
 }): ChartConfigV1 {
-  if (input.rowCount > 5_000) {
+  if (
+    !Number.isInteger(input.rowCount) ||
+    input.rowCount < 0 ||
+    input.rowCount > 5_000
+  ) {
     throw new Error(
-      "Charts support at most 5,000 rows; create an aggregated or downsampled table artifact first.",
+      "Chart rowCount must be a nonnegative integer no greater than 5,000.",
     );
   }
   const config = ChartConfigV1Schema.parse(input.config);
+  const suppliedFields = new Set(
+    input.config &&
+      typeof input.config === "object" &&
+      !Array.isArray(input.config)
+      ? Object.keys(input.config)
+      : [],
+  );
   const columnTypes = new Map(
     input.columns.map((column) => [column.name, column.type]),
   );
-  const referenced = referencedColumns(config);
+  const referenced = referencedColumns(config, suppliedFields);
   for (const name of referenced.all) {
     if (!columnTypes.has(name)) {
       throw new Error(

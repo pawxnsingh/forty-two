@@ -313,7 +313,11 @@ export function inferTableColumnsV1(
     if (!name.trim()) throw new Error("Table column names cannot be blank.");
     const values = rows
       .map((row) => row[name])
-      .filter((value) => value != null);
+      .filter(
+        (value) =>
+          value != null &&
+          !(typeof value === "number" && !Number.isFinite(value)),
+      );
     const nullable = values.length !== rows.length;
     let type: TableColumnV1["type"] = "string";
     let encoding: TableColumnV1["encoding"];
@@ -373,7 +377,7 @@ function canonicalTypeForSourceColumn(
   }
   if (/^(bool|boolean|bit)$/.test(type)) return { type: "boolean" };
   if (
-    /^(date|datetime|datetime2|datetimeoffset|smalldatetime|timestamp|timestamptz|timestamp_ntz|timestamp_ltz|timestamp_tz)$/.test(
+    /^(date|datetime|datetime2|datetimeoffset|smalldatetime|timestamp|timestamp with time zone|timestamp without time zone|timestamptz|timestamp_ntz|timestamp_ltz|timestamp_tz)$/.test(
       type,
     )
   ) {

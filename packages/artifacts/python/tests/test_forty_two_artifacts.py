@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -109,9 +110,10 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(arguments["sessionId"], SESSION_ID)
         self.assertEqual(captured["tool"], "begin_table_artifact_upload")
         payload = captured["payload"]
-        self.assertIn(b'"Sales":225.0', payload)
+        self.assertIn(b'"Sales":225', payload)
         self.assertEqual(receipt.content_sha256, hashlib.sha256(payload).hexdigest())
         self.assertEqual(json.loads(stdout.getvalue())["rowCount"], 2)
+        self.assertEqual(json.loads(stdout.getvalue())["title"], "Coffee")
         identifier = next(
             column for column in receipt.columns if column["name"] == "Identifier"
         )
@@ -124,6 +126,26 @@ class HelperTests(unittest.TestCase):
         oversized = FakeFrame([("x" * (64 * 1024 + 1),)], ["x"])
         with self.assertRaisesRegex(ValueError, "64 KiB"):
             MODULE._canonicalize_dataframe(oversized)
+
+    def test_canonicalization_rejects_json_key_collisions_and_supports_dates(self) -> None:
+        collision = FakeFrame([({1: "a", "1": "b"},)], ["payload"])
+        with self.assertRaisesRegex(ValueError, "collide"):
+            MODULE._canonicalize_dataframe(collision)
+
+        dated = FakeFrame([(datetime.date(2026, 8, 30),)], ["day"])
+        payload, columns, rows = MODULE._canonicalize_dataframe(dated)
+        self.assertEqual(columns[0]["type"], "datetime")
+        self.assertEqual(rows[0]["day"], "2026-08-30")
+        self.assertIn(b'"day":"2026-08-30"', payload)
+
+    def test_mixed_float_and_large_integer_uses_decimal_string_encoding(self) -> None:
+        frame = FakeFrame([(1.5,), (9_007_199_254_740_993,)], ["value"])
+        _payload, columns, rows = MODULE._canonicalize_dataframe(frame)
+        self.assertEqual(
+            columns,
+            [{"name": "value", "type": "decimal", "nullable": False, "encoding": "string"}],
+        )
+        self.assertEqual(rows, [{"value": "1.5"}, {"value": "9007199254740993"}])
 
     def test_canonical_table_preserves_prototype_shaped_column_names(self) -> None:
         dataframe = FakeFrame(
@@ -139,13 +161,21 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(rows, [row])
 
     def test_create_only_retry_defers_existing_blob_proof_to_finalize(self) -> None:
-        for status in (403, 409, 412):
+        for status in (409, 412):
             error = urllib.error.HTTPError(
                 "https://azure.example/upload", status, "rejected", {}, None
             )
             with mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=error):
                 MODULE._put_bytes("https://azure.example/upload", {}, b"payload")
             error.close()
+
+        forbidden = urllib.error.HTTPError(
+            "https://azure.example/upload", 403, "forbidden", {}, None
+        )
+        with mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=forbidden):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                MODULE._put_bytes("https://azure.example/upload", {}, b"payload")
+        forbidden.close()
 
         error = urllib.error.HTTPError(
             "https://azure.example/upload", 401, "unauthorized", {}, None

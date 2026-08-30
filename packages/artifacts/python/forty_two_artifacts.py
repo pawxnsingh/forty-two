@@ -110,6 +110,7 @@ class ArtifactReceipt:
     parent_artifact_ids: list[str]
     source_references: list[str]
     warnings: list[str]
+    title: str | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +124,7 @@ class ArtifactReceipt:
             "parentArtifactIds": self.parent_artifact_ids,
             "sourceReferences": self.source_references,
             "warnings": self.warnings,
+            "title": self.title,
         }
 
 
@@ -233,6 +235,71 @@ def _is_missing(value: Any) -> bool:
         return False
 
 
+def _javascript_number(value: float) -> str:
+    """Render a finite IEEE-754 value like JSON.stringify/Number#toString."""
+    if value == 0:
+        return "0"
+    text = repr(value).lower()
+    if "e" not in text:
+        return text[:-2] if text.endswith(".0") else text
+    coefficient, raw_exponent = text.split("e", 1)
+    exponent = int(raw_exponent)
+    sign = ""
+    if coefficient.startswith("-"):
+        sign, coefficient = "-", coefficient[1:]
+    digits = coefficient.replace(".", "")
+    decimal_position = 1 + exponent
+    if -6 < decimal_position <= 21:
+        if decimal_position <= 0:
+            return sign + "0." + ("0" * -decimal_position) + digits
+        if decimal_position >= len(digits):
+            return sign + digits + ("0" * (decimal_position - len(digits)))
+        return sign + digits[:decimal_position] + "." + digits[decimal_position:]
+    normalized_coefficient = digits[0]
+    if len(digits) > 1:
+        normalized_coefficient += "." + digits[1:]
+    exponent_text = f"+{exponent}" if exponent >= 0 else str(exponent)
+    return sign + normalized_coefficient + "e" + exponent_text
+
+
+def _javascript_object_keys(value: Mapping[str, Any]) -> list[str]:
+    indexed: list[tuple[int, str]] = []
+    ordinary: list[str] = []
+    for key in value:
+        if re.fullmatch(r"0|[1-9][0-9]*", key):
+            numeric = int(key)
+            if numeric < 4_294_967_295:
+                indexed.append((numeric, key))
+                continue
+        ordinary.append(key)
+    return [key for _numeric, key in sorted(indexed)] + ordinary
+
+
+def _canonical_dumps(value: Any) -> str:
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return "null"
+        return _javascript_number(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_canonical_dumps(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        return "{" + ",".join(
+            _canonical_dumps(key) + ":" + _canonical_dumps(value[key])
+            for key in _javascript_object_keys(value)
+        ) + "}"
+    raise TypeError(f"Unsupported canonical JSON value {type(value).__name__}")
+
+
 def _json_value(value: Any, path: str) -> Any:
     if _is_missing(value):
         return None
@@ -255,10 +322,15 @@ def _json_value(value: Any, path: str) -> Any:
     if isinstance(value, dt.date):
         return value.isoformat()
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_value(value[key], f"{path}.{key}")
-            for key in sorted(value, key=str)
-        }
+        result: dict[str, Any] = {}
+        for key in sorted(value, key=str):
+            string_key = str(key)
+            if string_key in result:
+                raise ValueError(
+                    f"{path} contains keys that collide after string conversion"
+                )
+            result[string_key] = _json_value(value[key], f"{path}.{string_key}")
+        return result
     if isinstance(value, (list, tuple)):
         return [_json_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
     if hasattr(value, "item"):
@@ -280,13 +352,18 @@ def _column_metadata(name: str, values: Sequence[Any]) -> dict[str, Any]:
         isinstance(value, (int, float)) and not isinstance(value, bool)
         for value in present
     ):
-        kind, encoding = "number", None
+        if any(isinstance(value, int) and abs(value) > MAX_SAFE_INTEGER for value in present):
+            kind, encoding = "decimal", "string"
+        else:
+            kind, encoding = "number", None
     elif all(isinstance(value, decimal.Decimal) for value in present):
         kind, encoding = "decimal", "string"
     elif all(isinstance(value, dt.datetime) for value in present):
         for value in present:
             if value.tzinfo is None or value.utcoffset() is None:
                 raise ValueError(f"Column {name!r} contains a timezone-naive datetime")
+        kind, encoding = "datetime", None
+    elif all(isinstance(value, dt.date) for value in present):
         kind, encoding = "datetime", None
     elif all(isinstance(value, str) for value in present):
         kind, encoding = "string", None
@@ -333,10 +410,7 @@ def _canonicalize_dataframe(dataframe: Any) -> tuple[bytes, list[dict[str, Any]]
         rows.append(row)
 
     header = {"$schema": "table.v1", "columns": columns, "rowCount": row_count}
-    text = "\n".join(
-        json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-        for item in [header, *rows]
-    ) + "\n"
+    text = "\n".join(_canonical_dumps(item) for item in [header, *rows]) + "\n"
     payload = text.encode("utf-8")
     if len(payload) > MAX_BYTES:
         raise ValueError("Canonical table exceeds the 5 MiB artifact limit")
@@ -350,11 +424,9 @@ def _put_bytes(url: str, headers: Mapping[str, str], payload: bytes) -> None:
             if response.status not in (200, 201):
                 raise RuntimeError(f"Azure artifact upload failed with HTTP {response.status}")
     except urllib.error.HTTPError as exc:
-        if exc.code in (403, 409, 412):
-            # Azure may report an existing blob as 403 for a create-only (`c`) SAS,
-            # or as 409/412 depending on the storage endpoint. Finalization always
-            # downloads the exact blob and independently proves whether its ETag,
-            # bytes, hash, and canonical metadata match this receipt.
+        if exc.code in (409, 412):
+            # A create-only retry can conflict with the exact prior upload.
+            # Finalization downloads and proves the ETag, bytes, hash, and metadata.
             return
         raise RuntimeError(f"Azure artifact upload failed with HTTP {exc.code}") from exc
 
@@ -366,6 +438,11 @@ def emit_table(
     parent_artifact_ids: Iterable[str] | None = None,
     source_references: Iterable[str] | None = None,
 ) -> ArtifactReceipt:
+    if title is not None and (
+        not isinstance(title, str) or not title.strip() or len(title.strip()) > 500
+    ):
+        raise ValueError("title must be a non-empty string up to 500 characters")
+    normalized_title = title.strip() if title is not None else None
     payload, columns, rows = _canonicalize_dataframe(dataframe)
     content_sha256 = hashlib.sha256(payload).hexdigest()
     parents = sorted(set(parent_artifact_ids or []))
@@ -405,6 +482,7 @@ def emit_table(
         parent_artifact_ids=parents,
         source_references=sources,
         warnings=[],
+        title=normalized_title,
     )
     print(json.dumps(receipt.to_dict(), ensure_ascii=False, separators=(",", ":")))
     return receipt
@@ -446,10 +524,7 @@ def _parse_canonical(payload: bytes) -> tuple[dict[str, Any], list[dict[str, Any
         or not all(isinstance(row, dict) for row in rows)
     ):
         raise RuntimeError("Downloaded artifact table.v1 header is invalid")
-    canonical = "\n".join(
-        json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-        for item in [header, *rows]
-    ) + "\n"
+    canonical = "\n".join(_canonical_dumps(item) for item in [header, *rows]) + "\n"
     if canonical.encode("utf-8") != payload:
         raise RuntimeError("Downloaded artifact is not canonical table.v1 JSONL")
     return header, rows

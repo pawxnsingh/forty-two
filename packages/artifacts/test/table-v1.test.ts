@@ -144,4 +144,44 @@ print(base64.b64encode(payload).decode("ascii"))
     assert.equal(parsed.rows[0]?.__proto__, "safe");
     assert.equal(parsed.rows[0]?.constructor, "also-safe");
   });
+
+  it("uses identical Python and TypeScript bytes for IEEE-754 edge formatting", () => {
+    const helperPath = fileURLToPath(
+      new URL("../python/forty_two_artifacts.py", import.meta.url),
+    );
+    const python = spawnSync("python3", ["-", helperPath], {
+      encoding: "utf8",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+      input: `
+import base64, importlib.util, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("forty_two_artifacts_float_probe", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+class Frame:
+    columns = ["tiny", "threshold", "whole", "large"]
+    index = range(1)
+    def itertuples(self, index=False, name=None):
+        return iter([(1e-7, 1e-6, 1.0, 1e20)])
+payload, _columns, _rows = module._canonicalize_dataframe(Frame())
+print(base64.b64encode(payload).decode("ascii"))
+`,
+    });
+    assert.equal(python.status, 0, python.stderr);
+    const pythonBytes = Buffer.from(python.stdout.trim(), "base64");
+    const typescript = serializeCanonicalTableV1({
+      columns: ["tiny", "threshold", "whole", "large"].map((name) => ({
+        name,
+        type: "number" as const,
+        nullable: false,
+      })),
+      rows: [{ tiny: 1e-7, threshold: 1e-6, whole: 1, large: 1e20 }],
+    });
+    assert.equal(
+      pythonBytes.toString("utf8"),
+      typescript.bytes.toString("utf8"),
+    );
+    assert.doesNotThrow(() => parseCanonicalTableV1(pythonBytes));
+  });
 });

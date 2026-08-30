@@ -196,6 +196,33 @@ describe("chart.v1 server contracts", () => {
         }),
       /5,000/,
     );
+    for (const rowCount of [-1, 1.5, Number.NaN]) {
+      assert.throws(
+        () =>
+          validateChartConfigV1({
+            columns,
+            rowCount,
+            config: {
+              selectedChartType: "scatter",
+              scatterAxis: { x: ["Sales"], y: ["Profit"] },
+            },
+          }),
+        /nonnegative integer/,
+      );
+    }
+    assert.throws(
+      () =>
+        validateChartConfigV1({
+          columns,
+          rowCount: 1,
+          config: {
+            selectedChartType: "scatter",
+            scatterAxis: { x: ["Sales"], y: ["Profit"] },
+            barAndLineAxis: { x: ["Missing"], y: ["Profit"] },
+          },
+        }),
+      /does not exist/,
+    );
   });
 
   it("validates a complete envelope and rejects row-count drift", () => {
@@ -221,13 +248,38 @@ describe("chart.v1 server contracts", () => {
       columns,
       rowCount: 1,
       sourceLimited: false,
-      data: [{ Sales: 10, Profit: 2 }],
+      data: [{ Sales: 10, Profit: 2, Region: "North" }],
       createdAt: new Date().toISOString(),
     };
     assert.equal(ChartArtifactEnvelopeV1Schema.parse(envelope).rowCount, 1);
     assert.equal(
       ChartArtifactEnvelopeV1Schema.safeParse({ ...envelope, data: [] })
         .success,
+      false,
+    );
+    assert.equal(
+      ChartArtifactEnvelopeV1Schema.safeParse({
+        ...envelope,
+        config: {
+          selectedChartType: "scatter",
+          scatterAxis: { x: ["Missing"], y: ["Profit"] },
+        },
+      }).success,
+      false,
+    );
+    assert.equal(
+      ChartArtifactEnvelopeV1Schema.safeParse({
+        ...envelope,
+        data: [{ Sales: "wrong", Profit: 2 }],
+      }).success,
+      false,
+    );
+    assert.equal(
+      ChartArtifactEnvelopeV1Schema.safeParse({
+        ...envelope,
+        columns: [...columns, columns[0]],
+        data: [{ Sales: 10, Profit: 2, Region: "North" }],
+      }).success,
       false,
     );
   });
