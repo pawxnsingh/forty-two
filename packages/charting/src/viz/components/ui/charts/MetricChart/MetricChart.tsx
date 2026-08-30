@@ -47,7 +47,7 @@ export const MetricChart: React.FC<MetricChartProps> = React.memo(
       const isDerivedTitle =
         typeof metricHeader === "object" && metricHeader?.columnId;
       if (isDerivedTitle) {
-        const isCount = metricValueAggregate === "count";
+        const isCount = metricHeader.aggregate === "count";
         const columnLabelFormat = headerColumnLabelFormat;
         const format: ColumnLabelFormat = {
           ...columnLabelFormat,
@@ -76,7 +76,7 @@ export const MetricChart: React.FC<MetricChartProps> = React.memo(
       if (isDerivedSubTitle) {
         const columnLabelFormat = subHeaderColumnLabelFormat;
         const isCount =
-          metricValueAggregate === "count" &&
+          metricSubHeader.aggregate === "count" &&
           columnLabelFormat.style !== "date";
         const format: ColumnLabelFormat = {
           ...columnLabelFormat,
@@ -105,7 +105,7 @@ export const MetricChart: React.FC<MetricChartProps> = React.memo(
         return formatLabel(value, headerLabelFormat, false);
       }
       return formatLabel(metricHeader.columnId, headerLabelFormat, true);
-    }, [metricHeader, firstRow, headerLabelFormat]);
+    }, [metricHeader, data, columnLabelFormats, headerLabelFormat]);
 
     const formattedSubHeader = useMemo(() => {
       if (!metricSubHeader) return "";
@@ -124,7 +124,7 @@ export const MetricChart: React.FC<MetricChartProps> = React.memo(
         return formatLabel(value, subHeaderFormat, false);
       }
       return formatLabel(metricSubHeader.columnId, subHeaderFormat, true);
-    }, [metricSubHeader, firstRow, subHeaderFormat]);
+    }, [metricSubHeader, data, columnLabelFormats, subHeaderFormat]);
 
     const formattedValue = useMemo(() => {
       if (metricValueAggregate && !metricValueLabel) {
@@ -157,7 +157,15 @@ export const MetricChart: React.FC<MetricChartProps> = React.memo(
       }
 
       return formatLabel(firstRowValue, yLabelFormat);
-    }, [firstRowValue, metricValueAggregate, yLabelFormat]);
+    }, [
+      data,
+      metricColumnId,
+      metricValueAggregate,
+      metricValueLabel,
+      columnLabelFormats,
+      firstRowValue,
+      yLabelFormat,
+    ]);
 
     // Trend: when the author declared a period column, the rows ARE a per-period series (already
     // ordered ascending by the query). Sparkline = the value series; delta = last vs previous
