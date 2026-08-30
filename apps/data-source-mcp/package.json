@@ -14,8 +14,12 @@
     "test:image": "bash test/image-sigterm.sh"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.28.0",
+    "@forty-two/artifacts": "workspace:*",
+    "@forty-two/db": "workspace:*",
     "@forty-two/data-source": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@repo/charting": "workspace:*",
     "express": "^5.2.1",
     "zod": "^4.4.3",
     "@forty-two/db": "workspace:*"

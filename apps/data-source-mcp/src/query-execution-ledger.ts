@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
+
 export interface QueryExecutionRecord {
   requestId: string;
   dataSource: string;
+  executedSqlSha256: string;
   rows: Record<string, unknown>[];
   recordedAt: string;
 }
@@ -18,6 +21,7 @@ export class QueryExecutionLedger {
   record(
     requestId: string,
     dataSource: string,
+    executedSql: string,
     rows: Record<string, unknown>[],
   ): QueryExecutionRecord {
     this.prune();
@@ -27,6 +31,9 @@ export class QueryExecutionLedger {
     const record = {
       requestId,
       dataSource,
+      executedSqlSha256: createHash("sha256")
+        .update(executedSql, "utf8")
+        .digest("hex"),
       rows: rows.slice(0, 10),
       recordedAt: new Date().toISOString(),
       expiresAt: Date.now() + RECORD_TTL_MS,
@@ -40,8 +47,13 @@ export class QueryExecutionLedger {
     this.prune();
     const record = this.records.get(requestId);
     if (!record) return undefined;
-    const { expiresAt: _expiresAt, ...publicRecord } = record;
-    return publicRecord;
+    return {
+      requestId: record.requestId,
+      dataSource: record.dataSource,
+      executedSqlSha256: record.executedSqlSha256,
+      rows: record.rows,
+      recordedAt: record.recordedAt,
+    };
   }
 
   private prune(): void {

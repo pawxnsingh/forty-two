@@ -9,18 +9,25 @@ import { createDynamicConnectionStore } from "./dynamic-store.js";
 import { drainAndClose } from "./shutdown.js";
 
 const config = loadServerConfig();
-initializeDatabase({ connectionString: config.dynamic.controlDatabaseUrl });
-const registry = new ConnectionRegistry(config.connections, {
-  encryptionKey: config.dynamic.encryptionKey,
-  store: createDynamicConnectionStore(),
-});
+if (config.dynamic) {
+  initializeDatabase({ connectionString: config.dynamic.controlDatabaseUrl });
+}
+const registry = new ConnectionRegistry(
+  config.connections,
+  config.dynamic
+    ? {
+        encryptionKey: config.dynamic.encryptionKey,
+        store: createDynamicConnectionStore(),
+      }
+    : undefined,
+);
 const lifecycle = new HttpRequestLifecycle();
 const app = createHttpApp(config, registry, lifecycle);
 const httpServer = createServer(app);
 
 httpServer.listen(config.port, config.host, () => {
   console.log(
-    `Forty Two data-source MCP listening on http://${config.host}:${config.port}/mcp with dynamic datasource resolution enabled`,
+    `Forty Two data-source MCP listening on http://${config.host}:${config.port}/mcp with ${config.connections.length} configured connection(s)`,
   );
 });
 

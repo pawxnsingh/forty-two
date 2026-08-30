@@ -6,7 +6,6 @@
 **/.turbo
 **/node_modules
 node_modules
-vendor/trueforge
 .env
 .env.*
 !.env.example
