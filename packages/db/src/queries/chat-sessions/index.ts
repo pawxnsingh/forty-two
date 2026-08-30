@@ -12,4 +12,5 @@ export * from "./list-chat-sessions.js";
 export * from "./request-hash.js";
 export * from "./plan.js";
 export * from "./soft-delete-chat-session.js";
+export * from "./turn-requests.js";
 export * from "./update-chat-session-lifecycle.js";

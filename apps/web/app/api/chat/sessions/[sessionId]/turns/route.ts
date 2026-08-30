@@ -1,8 +1,10 @@
 import {
   ApiInputError,
   apiError,
+  createApplicationTurn,
   readTurnInput,
   trueForgeClient,
+  trueforgeSessionId,
   validId,
 } from "../../../../../../lib/server/chat-backend";
 
@@ -27,11 +29,14 @@ export async function GET(
       throw new ApiInputError("pageToken is invalid.");
     }
     const page = await trueForgeClient().sessions.listTurns(
-      validId(sessionId, "session id"),
+      await trueforgeSessionId(validId(sessionId, "session id")),
       { limit, pageToken },
     );
     return Response.json({
-      data: page.data,
+      data: page.data.map((turn) => ({
+        ...turn,
+        sessionId: validId(sessionId, "session id"),
+      })),
       pagination: page.response.pagination,
     });
   } catch (error) {
@@ -46,11 +51,16 @@ export async function POST(
   try {
     const { sessionId } = await context.params;
     const userMessage = await readTurnInput(request);
-    const turn = await trueForgeClient().sessions.createTurn(
-      validId(sessionId, "session id"),
-      { input: [userMessage] },
+    const safeSessionId = validId(sessionId, "session id");
+    const turn = await createApplicationTurn(
+      safeSessionId,
+      userMessage,
+      request,
     );
-    return Response.json(turn, { status: 202 });
+    return Response.json(
+      { ...turn, data: { ...turn.data, sessionId: safeSessionId } },
+      { status: 202 },
+    );
   } catch (error) {
     return apiError(error);
   }

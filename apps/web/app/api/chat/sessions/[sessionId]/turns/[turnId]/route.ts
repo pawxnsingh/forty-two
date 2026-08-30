@@ -1,6 +1,7 @@
 import {
   apiError,
   trueForgeClient,
+  trueforgeSessionId,
   validId,
 } from "../../../../../../../lib/server/chat-backend";
 
@@ -17,10 +18,13 @@ export async function GET(
   try {
     const { sessionId, turnId } = await context.params;
     const turn = await trueForgeClient().sessions.getTurn(
-      validId(sessionId, "session id"),
+      await trueforgeSessionId(validId(sessionId, "session id")),
       validId(turnId, "turn id"),
     );
-    return Response.json(turn);
+    return Response.json({
+      ...turn,
+      data: { ...turn.data, sessionId: validId(sessionId, "session id") },
+    });
   } catch (error) {
     return apiError(error);
   }

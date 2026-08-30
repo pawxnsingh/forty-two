@@ -3,10 +3,15 @@ import test from "node:test";
 
 import {
   assertNoDirectDatasourceCalls,
+  collectAllPageItems,
   correlatedCodeModeResults,
   discoverSandboxEvents,
   listAllEventPages,
 } from "./lib/integration-events.mjs";
+import {
+  COMBINED_READ_SQL,
+  persistedCombinedExecCalls,
+} from "./lib/combined-flow-contract.mjs";
 
 test("rejects direct and deferred datasource tool calls", () => {
   assert.throws(() =>
@@ -82,6 +87,51 @@ test("walks every event page and rejects repeated cursors", async () => {
       data: [],
       pagination: { next_page_token: "same" },
     })),
+  );
+});
+
+test("retains an earlier combined-flow exec call across an auto-paginated SDK page", async () => {
+  const command = [
+    'call_tool("forty-two-data-source", "get_file_download_url", {})',
+    'requestHeaders = descriptor["requestHeaders"]',
+    'expectedETag = descriptor["expectedETag"]',
+    `call_tool("forty-two-data-source", "run_read_query", {"sql":"${COMBINED_READ_SQL}"})`,
+  ].join("\n");
+  const sdkPage = {
+    async *[Symbol.asyncIterator]() {
+      yield {
+        type: "tool.response",
+        toolCallId: "exec-early",
+        content: "BOUND_E2E_OK",
+      };
+      yield {
+        type: "model.message",
+        toolCalls: [
+          {
+            id: "exec-early",
+            toolInfo: { name: "exec" },
+            function: {
+              name: "exec",
+              arguments: JSON.stringify({ command }),
+            },
+          },
+        ],
+      };
+    },
+  };
+  const events = await collectAllPageItems(sdkPage);
+
+  const calls = persistedCombinedExecCalls(events, "forty-two-data-source");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].id, "exec-early");
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "tool.response" &&
+        event.toolCallId === calls[0].id &&
+        event.content === "BOUND_E2E_OK",
+    ),
+    true,
   );
 });
 

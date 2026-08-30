@@ -21,6 +21,12 @@ export const chatSessionStatusEnum = pgEnum("chat_session_status", [
   "deleted",
 ]);
 
+export const chatTurnRequestStateEnum = pgEnum("chat_turn_request_state", [
+  "creating",
+  "created",
+  "indeterminate",
+]);
+
 export const chatSessions = pgTable(
   "chat_sessions",
   {
@@ -150,9 +156,69 @@ export const chatSessionDataSources = pgTable(
   ],
 );
 
+export const chatTurnRequests = pgTable(
+  "chat_turn_requests",
+  {
+    chatSessionId: text("chat_session_id")
+      .notNull()
+      .references(() => chatSessions.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    state: chatTurnRequestStateEnum("state").default("creating").notNull(),
+    trueforgeTurnId: text("trueforge_turn_id").unique(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "chat_turn_requests_pk",
+      columns: [table.chatSessionId, table.idempotencyKey],
+    }),
+    check(
+      "chat_turn_requests_key_check",
+      sql`char_length(${table.idempotencyKey}) BETWEEN 1 AND 255 AND btrim(${table.idempotencyKey}) = ${table.idempotencyKey}`,
+    ),
+    check(
+      "chat_turn_requests_hash_check",
+      sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "chat_turn_requests_state_turn_check",
+      sql`(${table.state} = 'created' AND ${table.trueforgeTurnId} IS NOT NULL AND char_length(btrim(${table.trueforgeTurnId})) BETWEEN 1 AND 192)
+        OR (${table.state} IN ('creating', 'indeterminate') AND ${table.trueforgeTurnId} IS NULL)`,
+    ),
+    check(
+      "chat_turn_requests_timestamp_order_check",
+      sql`${table.updatedAt} >= ${table.createdAt}`,
+    ),
+    index("chat_turn_requests_session_state_idx").on(
+      table.chatSessionId,
+      table.state,
+    ),
+  ],
+);
+
 export const chatSessionsRelations = relations(chatSessions, ({ many }) => ({
   dataSourceBindings: many(chatSessionDataSources),
+  turnRequests: many(chatTurnRequests),
 }));
+
+export const chatTurnRequestsRelations = relations(
+  chatTurnRequests,
+  ({ one }) => ({
+    chatSession: one(chatSessions, {
+      fields: [chatTurnRequests.chatSessionId],
+      references: [chatSessions.id],
+    }),
+  }),
+);
 
 export const chatSessionDataSourcesRelations = relations(
   chatSessionDataSources,
@@ -174,3 +240,5 @@ export type ChatSessionDataSourceRow =
   typeof chatSessionDataSources.$inferSelect;
 export type NewChatSessionDataSourceRow =
   typeof chatSessionDataSources.$inferInsert;
+export type ChatTurnRequestRow = typeof chatTurnRequests.$inferSelect;
+export type NewChatTurnRequestRow = typeof chatTurnRequests.$inferInsert;

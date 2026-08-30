@@ -7,9 +7,11 @@ import {
   ChatSessionDataSourceLimitError,
   ChatSessionDataSourceUnavailableError,
   ChatSessionIdempotencyConflictError,
+  ChatTurnRequestConflictError,
   activateChatSession,
   authorizeChatSessionCapability,
   closeDatabase,
+  completeChatTurnRequest,
   completeFileDataSourceUpload,
   createChatSession,
   createFileDataSource,
@@ -19,12 +21,15 @@ import {
   getChatSession,
   getChatSessionByIdempotencyKey,
   getChatSessionForCleanup,
+  getChatTurnRequest,
   initializeDatabase,
   listChatSessionDataSourceBindings,
   listChatSessionDataSourceIds,
   listChatSessionDataSources,
   migrateDatabase,
+  markChatTurnRequestIndeterminate,
   revokeChatSessionCapability,
+  reserveChatTurnRequest,
   softDeleteChatSession,
   updateDataSourceLifecycle,
   type ChatSession,
@@ -215,12 +220,16 @@ describe("chat session repositories against PostgreSQL", () => {
       select table_name
       from information_schema.tables
       where table_schema = 'public'
-        and table_name in ('chat_sessions', 'chat_session_data_sources')
+        and table_name in (
+          'chat_sessions',
+          'chat_session_data_sources',
+          'chat_turn_requests'
+        )
       order by table_name
     `;
     assert.deepEqual(
       tables.map((row) => row.table_name),
-      ["chat_session_data_sources", "chat_sessions"],
+      ["chat_session_data_sources", "chat_sessions", "chat_turn_requests"],
     );
 
     const enumValues = await testSql<{ enumlabel: string }[]>`
@@ -233,6 +242,18 @@ describe("chat session repositories against PostgreSQL", () => {
     assert.deepEqual(
       enumValues.map((row) => row.enumlabel),
       ["creating", "active", "failed", "deleted"],
+    );
+
+    const turnRequestEnumValues = await testSql<{ enumlabel: string }[]>`
+      select enumlabel
+      from pg_enum
+      join pg_type on pg_type.oid = pg_enum.enumtypid
+      where pg_type.typname = 'chat_turn_request_state'
+      order by pg_enum.enumsortorder
+    `;
+    assert.deepEqual(
+      turnRequestEnumValues.map((row) => row.enumlabel),
+      ["creating", "created", "indeterminate"],
     );
 
     const constraints = await testSql<{ conname: string }[]>`
@@ -249,10 +270,16 @@ describe("chat session repositories against PostgreSQL", () => {
         'chat_sessions_id_format_check',
         'chat_sessions_idempotency_hash_check',
         'chat_sessions_idempotency_pair_check',
-        'chat_sessions_timestamp_order_check'
+        'chat_sessions_timestamp_order_check',
+        'chat_turn_requests_pk',
+        'chat_turn_requests_chat_session_id_chat_sessions_id_fk',
+        'chat_turn_requests_key_check',
+        'chat_turn_requests_hash_check',
+        'chat_turn_requests_state_turn_check',
+        'chat_turn_requests_timestamp_order_check'
       )
     `;
-    assert.equal(constraints.length, 11);
+    assert.equal(constraints.length, 17);
   });
 
   it("creates a creating session with deduplicated mixed ready bindings", async () => {
@@ -455,6 +482,103 @@ describe("chat session repositories against PostgreSQL", () => {
       false,
       true,
     ]);
+  });
+
+  it("atomically reserves and terminalizes durable turn requests", async () => {
+    const source = await createReadyDatabase();
+    const active = await activate(
+      (await createSession([source.id])).chatSession,
+    );
+    const idempotencyKey = nextValue("turn-idempotency");
+    const requestHash = "a".repeat(64);
+
+    const reservations = await Promise.all([
+      reserveChatTurnRequest({
+        chatSessionId: active.id,
+        idempotencyKey,
+        requestHash,
+      }),
+      reserveChatTurnRequest({
+        chatSessionId: active.id,
+        idempotencyKey,
+        requestHash,
+      }),
+    ]);
+    assert.deepEqual(
+      reservations.map((reservation) => reservation.reserved).sort(),
+      [false, true],
+    );
+    assert.equal(
+      new Set(
+        reservations.map((reservation) => reservation.request.requestHash),
+      ).size,
+      1,
+    );
+    await assert.rejects(
+      reserveChatTurnRequest({
+        chatSessionId: active.id,
+        idempotencyKey,
+        requestHash: "b".repeat(64),
+      }),
+      ChatTurnRequestConflictError,
+    );
+
+    const completed = await completeChatTurnRequest({
+      chatSessionId: active.id,
+      idempotencyKey,
+      requestHash,
+      trueforgeTurnId: nextValue("turn"),
+    });
+    assert.equal(completed.state, "created");
+    assert.ok(completed.trueforgeTurnId);
+    assert.deepEqual(
+      await getChatTurnRequest({ chatSessionId: active.id, idempotencyKey }),
+      completed,
+    );
+    assert.equal(
+      (
+        await markChatTurnRequestIndeterminate({
+          chatSessionId: active.id,
+          idempotencyKey,
+          requestHash,
+        })
+      ).state,
+      "created",
+    );
+
+    const uncertainKey = nextValue("turn-indeterminate");
+    await reserveChatTurnRequest({
+      chatSessionId: active.id,
+      idempotencyKey: uncertainKey,
+      requestHash,
+    });
+    const uncertain = await markChatTurnRequestIndeterminate({
+      chatSessionId: active.id,
+      idempotencyKey: uncertainKey,
+      requestHash,
+    });
+    assert.equal(uncertain.state, "indeterminate");
+    assert.equal(uncertain.trueforgeTurnId, null);
+    assert.equal(
+      (
+        await reserveChatTurnRequest({
+          chatSessionId: active.id,
+          idempotencyKey: uncertainKey,
+          requestHash,
+        })
+      ).request.state,
+      "indeterminate",
+    );
+
+    await assert.rejects(
+      testSql`
+        update chat_turn_requests
+        set state = 'created', trueforge_turn_id = null
+        where chat_session_id = ${active.id}
+          and idempotency_key = ${uncertainKey}
+      `,
+      (error: unknown) => isPostgresError(error, "23514"),
+    );
   });
 
   it("optimistically activates or fails creating sessions and enforces invariants", async () => {
