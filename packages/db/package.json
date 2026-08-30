@@ -20,9 +20,8 @@
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=../../.env --import tsx src/migrate-cli.ts",
-    "pretest": "pnpm build",
     "test": "pnpm test:unit && pnpm test:integration",
-    "test:unit": "node --import tsx --test test/*.unit.test.ts",
+    "test:unit": "pnpm build && node --import tsx --test test/*.unit.test.ts",
     "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/*.int.test.ts"
   },
   "dependencies": {
