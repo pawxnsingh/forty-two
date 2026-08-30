@@ -7,6 +7,7 @@ import {
 const MAX_FILES = 4;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_MULTIPART_BODY_BYTES = MAX_TOTAL_FILE_BYTES + 1024 * 1024;
 const MAX_MESSAGE_CHARS = 20_000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/;
 const TERMINAL_TURN_STATES = new Set(["done", "error", "cancelled"]);
@@ -65,7 +66,16 @@ export async function readTurnInput(
 async function readMultipartTurnInput(
   request: Request,
 ): Promise<TrueForgeApi.UserMessage> {
-  const form = await request.formData().catch(() => {
+  const bytes = await readRequestBodyWithinLimit(
+    request,
+    MAX_MULTIPART_BODY_BYTES,
+  );
+  const boundedRequest = new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: bytes,
+  });
+  const form = await boundedRequest.formData().catch(() => {
     throw new ApiInputError("Multipart body could not be parsed.");
   });
   const message = validateMessage(form.get("message"));
@@ -88,6 +98,51 @@ async function readMultipartTurnInput(
   ];
   for (const file of files) parts.push(await encodeFile(file));
   return { type: "user.message", content: parts };
+}
+
+export async function readRequestBodyWithinLimit(
+  request: Request,
+  maxBytes: number,
+): Promise<ArrayBuffer> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength !== null) {
+    const length = Number(declaredLength);
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new ApiInputError("Content-Length is invalid.");
+    }
+    if (length > maxBytes) {
+      throw new ApiInputError("The multipart request is too large.", 413);
+    }
+  }
+  if (!request.body) {
+    throw new ApiInputError("Multipart body could not be parsed.");
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      totalBytes += next.value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new ApiInputError("The multipart request is too large.", 413);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
 }
 
 async function encodeFile(file: File): Promise<TrueForgeApi.FileContent> {
@@ -184,7 +239,10 @@ export async function waitForTurn(
     const requestController = new AbortController();
     const abortFromCaller = () => requestController.abort(signal?.reason);
     signal?.addEventListener("abort", abortFromCaller, { once: true });
-    const deadlineTimer = setTimeout(() => requestController.abort(), remaining);
+    const deadlineTimer = setTimeout(
+      () => requestController.abort(),
+      remaining,
+    );
     let turn: TrueForgeApi.Turn;
     try {
       turn = (

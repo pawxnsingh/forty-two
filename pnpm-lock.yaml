@@ -125,6 +125,9 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
       typescript:
         specifier: 5.9.3
         version: 5.9.3
