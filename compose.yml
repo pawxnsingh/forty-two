@@ -341,8 +341,12 @@ services:
       - web_pnpm_store:/pnpm/store
       - web_next_cache:/workspace/apps/web/.next
     depends_on:
+      mysql-demo-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      sqlserver-demo-init:
+        condition: service_completed_successfully
       trueforge-bootstrap:
         condition: service_completed_successfully
     healthcheck:
