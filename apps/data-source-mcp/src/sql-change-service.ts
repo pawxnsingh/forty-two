@@ -291,12 +291,14 @@ export class SqlChangeService {
             executionId,
             rowLimit,
             maximumBytesBilled,
+            connection.policy.queryTimeoutMs,
           )
         : await this.applyRowChange(
             changeSet,
             executionId,
             rowLimit,
             maximumBytesBilled,
+            connection.policy.queryTimeoutMs,
           );
       const completed = await completeSqlChangeApply({
         executionId,
@@ -376,6 +378,7 @@ export class SqlChangeService {
     executionId: string,
     maximumRows: number,
     maximumBytesBilled: string | undefined,
+    timeout: number,
   ) {
     const preconditions = rowPreconditions(changeSet.preconditions);
     const targetSql = stringProperty(changeSet.executionStrategy, "targetSql");
@@ -389,6 +392,7 @@ export class SqlChangeService {
       expectedAffectedRows: changeSet.expectedAffectedRows,
       expectedRowHashes: preconditions.rowHashes,
       maximumRows,
+      timeout,
       executionToken: executionId,
       ...(maximumBytesBilled ? { maximumBytesBilled } : {}),
       ...(preconditions.providerPrecondition
@@ -402,6 +406,7 @@ export class SqlChangeService {
     executionId: string,
     maximumRows: number,
     maximumBytesBilled: string | undefined,
+    timeout: number,
   ) {
     const structured = StructuredColumnChangeSchema.parse(
       changeSet.structuredOperation,
@@ -419,6 +424,7 @@ export class SqlChangeService {
       expectedSchemaFingerprint: schemaFingerprint,
       expectedAffectedRows: changeSet.expectedAffectedRows,
       maximumRows,
+      timeout,
       preconditionSql: preconditions.selectSql,
       verificationSql: preconditions.verificationSql,
       expectedRowHashes: preconditions.rowHashes,
