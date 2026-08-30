@@ -227,12 +227,13 @@ export class MySQLIntrospector extends BaseIntrospector {
                table_name as table_name,
                column_name as name,
                ordinal_position as position,
-               data_type,
-               is_nullable,
+               data_type as data_type_value,
+               column_type as physical_type_value,
+               is_nullable as nullable_value,
                column_default as default_value,
                character_maximum_length as max_length,
-               numeric_precision as precision,
-               numeric_scale as scale,
+               numeric_precision as numeric_precision_value,
+               numeric_scale as numeric_scale_value,
                column_comment as comment
         FROM information_schema.columns
         ${whereClause}
@@ -245,12 +246,13 @@ export class MySQLIntrospector extends BaseIntrospector {
         schema: this.getString(row.database_name) || "",
         database: this.getString(row.database_name) || "",
         position: this.parseNumber(row.position) || 0,
-        dataType: this.getString(row.data_type) || "",
-        isNullable: this.getString(row.is_nullable) === "YES",
-        defaultValue: this.getString(row.default_value) || "",
-        maxLength: this.parseNumber(row.max_length) ?? 0,
-        precision: this.parseNumber(row.precision) ?? 0,
-        scale: this.parseNumber(row.scale) ?? 0,
+        dataType: this.getString(row.data_type_value) || "",
+        physicalType: this.getString(row.physical_type_value),
+        isNullable: this.getString(row.nullable_value) === "YES",
+        defaultValue: this.getString(row.default_value),
+        maxLength: this.parseNumber(row.max_length),
+        precision: this.parseNumber(row.numeric_precision_value),
+        scale: this.parseNumber(row.numeric_scale_value),
         comment: this.getString(row.comment) || "",
       }));
     } catch (error) {

@@ -15,6 +15,22 @@ import type {
   View,
 } from "./types/introspection.js";
 import type { QueryRequest, QueryResult } from "./types/query.js";
+import {
+  prepareControlledSqlChange,
+  type ApplyControlledMutationInput,
+  type ApplyControlledMutationResult,
+  type PreparedSqlChange,
+  type SqlChangeDialect,
+  prepareStructuredColumnChange,
+  type PreparedStructuredColumnChange,
+  type StructuredColumnChange,
+  StructuredColumnChangeSchema,
+  fingerprintSchema,
+  splitStructuredCanonicalSql,
+  verifyStructuredColumnResult,
+  structuredColumnTypeMatches,
+  type ApplyStructuredColumnChangeResult,
+} from "./mutations/index.js";
 import { resolveQueryTimeout } from "./utils/query-options.js";
 import { checkQueryIsReadOnly } from "./utils/sql-validation.js";
 
@@ -25,6 +41,23 @@ const SAFE_IDENTIFIER = /^[A-Za-z0-9_$-]+$/;
 interface AdapterInitialization {
   version: number;
   promise: Promise<DatabaseAdapter>;
+}
+
+function renderMutationTarget(
+  target: { catalog?: string | null; schema?: string | null; table: string },
+  dialect: SqlChangeDialect,
+): string {
+  const quote = (value: string): string => {
+    if (dialect === "mysql" || dialect === "bigquery") {
+      return `\`${value.replace(/`/g, "``")}\``;
+    }
+    if (dialect === "transactsql") return `[${value.replace(/]/g, "]]")}]`;
+    return `"${value.replace(/"/g, '""')}"`;
+  };
+  return [target.catalog, target.schema, target.table]
+    .filter((part): part is string => Boolean(part))
+    .map(quote)
+    .join(".");
 }
 
 interface InvalidatedAdapterResources {
@@ -285,6 +318,156 @@ export class DataSource {
         },
       };
     }
+  }
+
+  async prepareSqlChange(input: {
+    dataSource: string;
+    sql: string;
+    dialect: SqlChangeDialect;
+    timeout?: number;
+    maxRows?: number;
+    maximumBytesBilled?: string;
+  }): Promise<PreparedSqlChange> {
+    const adapter = await this.getAdapter(input.dataSource);
+    return prepareControlledSqlChange({ adapter, ...input });
+  }
+
+  async applySqlChange(
+    dataSourceName: string,
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    const adapter = await this.getAdapter(dataSourceName);
+    if (!adapter.applyControlledMutation) {
+      throw new Error(
+        "Controlled mutations are unavailable for this connector.",
+      );
+    }
+    return adapter.applyControlledMutation(input);
+  }
+
+  async estimateSqlChange(input: {
+    dataSource: string;
+    canonicalSql: string;
+    timeout?: number;
+  }): Promise<Record<string, unknown> | null> {
+    const adapter = await this.getAdapter(input.dataSource);
+    return (
+      (await adapter.estimateControlledMutation?.({
+        canonicalSql: input.canonicalSql,
+        params: [],
+        timeout: input.timeout,
+      })) ?? null
+    );
+  }
+
+  async prepareColumnChange(input: {
+    dataSource: string;
+    dialect: SqlChangeDialect;
+    change: StructuredColumnChange;
+    timeout?: number;
+    maxRows?: number;
+    maximumBytesBilled?: string;
+  }): Promise<PreparedStructuredColumnChange> {
+    const adapter = await this.getAdapter(input.dataSource);
+    return prepareStructuredColumnChange({ adapter, ...input });
+  }
+
+  async applyColumnChange(input: {
+    dataSource: string;
+    dialect: SqlChangeDialect;
+    change: StructuredColumnChange;
+    canonicalSql: string;
+    expectedSchemaFingerprint: string;
+    expectedAffectedRows: number;
+    maximumRows: number;
+    preconditionSql: string | null;
+    verificationSql: string | null;
+    expectedRowHashes: string[];
+    expectedPreconditionRowHashes?: string[];
+    providerPrecondition?: {
+      kind: "bigquery_row_json";
+      values: string[];
+      verificationValues?: string[];
+    };
+    executionToken: string;
+    maximumBytesBilled?: string;
+    ddlAlreadyCommitted?: boolean;
+    timeout?: number;
+  }): Promise<ApplyStructuredColumnChangeResult> {
+    const adapter = await this.getAdapter(input.dataSource);
+    if (!adapter.applyStructuredColumnChange) {
+      throw new Error(
+        "Structured column changes are unavailable for this connector.",
+      );
+    }
+    const parsedChange = StructuredColumnChangeSchema.parse(input.change);
+    const target = parsedChange.target;
+    const before = await adapter
+      .introspect()
+      .getColumns(
+        target.catalog ?? undefined,
+        target.schema ?? undefined,
+        target.table,
+      );
+    const resume = resolveStructuredResume(
+      parsedChange,
+      before,
+      input.expectedSchemaFingerprint,
+      input.dialect,
+    );
+    if (!resume.matches) {
+      const error = new Error("Column-change schema precondition is stale.");
+      error.name = "SqlChangeStaleError";
+      throw error;
+    }
+    const renderedTarget = {
+      catalog: target.catalog ?? null,
+      schema: target.schema ?? null,
+      table: target.table,
+      sql: renderMutationTarget(target, input.dialect),
+    };
+    const phases = splitStructuredCanonicalSql({
+      operation: parsedChange.operation,
+      canonicalSql: input.canonicalSql,
+    });
+    const skipDdl = resume.skipDdl || input.ddlAlreadyCommitted === true;
+    const result = await adapter.applyStructuredColumnChange({
+      operation: parsedChange.operation,
+      target: renderedTarget,
+      ...phases,
+      expectedSchemaFingerprint: input.expectedSchemaFingerprint,
+      expectedAffectedRows: input.expectedAffectedRows,
+      maximumRows: input.maximumRows,
+      preconditionSql: input.preconditionSql,
+      verificationSql: input.verificationSql,
+      expectedRowHashes: input.expectedRowHashes,
+      expectedPreconditionRowHashes: input.expectedPreconditionRowHashes,
+      ...(input.providerPrecondition
+        ? { providerPrecondition: input.providerPrecondition }
+        : {}),
+      executionToken: input.executionToken,
+      ...(input.maximumBytesBilled
+        ? { maximumBytesBilled: input.maximumBytesBilled }
+        : {}),
+      skipDdl,
+      timeout: input.timeout,
+    });
+    const after = await adapter
+      .introspect()
+      .getColumns(
+        target.catalog ?? undefined,
+        target.schema ?? undefined,
+        target.table,
+      );
+    return {
+      ...result,
+      verification: {
+        ...result.verification,
+        ...verifyStructuredColumnResult(parsedChange, after, input.dialect),
+        schemaFingerprint: fingerprintSchema(after),
+        resumedAfterImplicitCommit: skipDdl,
+      },
+    };
   }
 
   // ========== INTROSPECTION METHODS ==========
@@ -736,4 +919,51 @@ export class DataSource {
       this.dataSourceVersions.get(name) === version
     );
   }
+}
+
+function resolveStructuredResume(
+  change: StructuredColumnChange,
+  columns: Column[],
+  expectedFingerprint: string,
+  dialect: SqlChangeDialect,
+): { matches: boolean; skipDdl: boolean } {
+  if (fingerprintSchema(columns) === expectedFingerprint) {
+    return { matches: true, skipDdl: false };
+  }
+  const byName = new Map(
+    columns.map((column) => [column.name.toLowerCase(), column]),
+  );
+  if (change.operation === "rename_column") {
+    if (
+      byName.has(change.sourceColumn.toLowerCase()) ||
+      !byName.has(change.destinationColumn.toLowerCase())
+    ) {
+      return { matches: false, skipDdl: false };
+    }
+    const reconstructed = columns.map((column) =>
+      column.name.toLowerCase() === change.destinationColumn.toLowerCase()
+        ? { ...column, name: change.sourceColumn }
+        : column,
+    );
+    return {
+      matches: fingerprintSchema(reconstructed) === expectedFingerprint,
+      skipDdl: true,
+    };
+  }
+  const added = byName.get(change.columnName.toLowerCase());
+  if (
+    !added ||
+    !added.isNullable ||
+    added.defaultValue != null ||
+    !structuredColumnTypeMatches(added, change.columnType, dialect)
+  ) {
+    return { matches: false, skipDdl: false };
+  }
+  const withoutAdded = columns
+    .filter((column) => column !== added)
+    .map((column, index) => ({ ...column, position: index + 1 }));
+  return {
+    matches: fingerprintSchema(withoutAdded) === expectedFingerprint,
+    skipDdl: true,
+  };
 }

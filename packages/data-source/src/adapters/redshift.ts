@@ -17,6 +17,20 @@ import {
 import { AsyncMutex } from "./helpers/async-mutex.js";
 import { normalizeRowValues } from "./helpers/normalize-values.js";
 import { mapPostgreSQLType } from "./type-mappings/postgresql.js";
+import type {
+  ApplyControlledMutationInput,
+  ApplyControlledMutationResult,
+} from "../mutations/types.js";
+import {
+  assertAffectedRows,
+  assertMutationPreconditions,
+  verifiedRowEvidence,
+} from "../mutations/verify.js";
+import {
+  boundedStructuredMutationSelect,
+  type ApplyStructuredColumnChangeInput,
+  type ApplyStructuredColumnChangeResult,
+} from "../mutations/structured-column-change.js";
 
 // Internal types for pg-cursor that aren't exported
 interface CursorResult {
@@ -93,6 +107,28 @@ export class RedshiftAdapter extends BaseAdapter {
     return this.queryMutex.runExclusive(() =>
       this.queryExclusive(sql, params, maxRows, timeout),
     );
+  }
+
+  async queryReadOnly(
+    sql: string,
+    params?: QueryParameter[],
+    maxRows?: number,
+    timeout?: number,
+  ): Promise<AdapterQueryResult> {
+    return this.queryMutex.runExclusive(async () => {
+      this.ensureConnected();
+      if (!this.client) throw new Error("Redshift client not initialized");
+
+      await this.client.query("BEGIN READ ONLY");
+      try {
+        const result = await this.queryExclusive(sql, params, maxRows, timeout);
+        await this.client.query("ROLLBACK");
+        return result;
+      } catch (error) {
+        await this.client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   private async queryExclusive(
@@ -265,6 +301,139 @@ export class RedshiftAdapter extends BaseAdapter {
     return this.queryMutex.runExclusive(() =>
       this.executeWriteExclusive(sql, params, timeout),
     );
+  }
+
+  override async applyControlledMutation(
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    return this.queryMutex.runExclusive(async () => {
+      const timeoutMs = resolveQueryTimeout(input.timeout);
+      this.ensureConnected();
+      if (!this.client) throw new Error("Redshift client not initialized");
+      await this.client.query("BEGIN");
+      try {
+        await this.client.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+        await this.client.query(`SET statement_timeout = ${timeoutMs}`);
+        await this.client.query(`LOCK TABLE ${input.targetSql}`);
+        const locked = await this.client.query(
+          input.preconditionSql,
+          input.preconditionParams,
+        );
+        const rows = locked.rows.map(normalizeRowValues);
+        assertMutationPreconditions(rows, input.expectedRowHashes);
+        const changed = await this.client.query(
+          input.canonicalSql,
+          input.params,
+        );
+        const rowCount = changed.rowCount ?? 0;
+        assertAffectedRows(rowCount, input.expectedAffectedRows);
+        const evidence = await this.client.query<{ id: string }>(
+          "SELECT pg_last_query_id()::text AS id",
+        );
+        const providerExecutionId = evidence.rows[0]?.id;
+        if (!providerExecutionId)
+          throw new Error("Redshift execution evidence is unavailable.");
+        await this.client.query("COMMIT");
+        return {
+          rowCount,
+          providerExecutionId,
+          verification: {
+            isolation: "serializable",
+            locking: "table",
+            lockedRows: rows.length,
+            affectedRows: rowCount,
+          },
+        };
+      } catch (error) {
+        await this.client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  override async applyStructuredColumnChange(
+    input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult> {
+    return this.queryMutex.runExclusive(async () => {
+      const timeoutMs = resolveQueryTimeout(input.timeout);
+      this.ensureConnected();
+      if (!this.client) throw new Error("Redshift client not initialized");
+      await this.client.query("BEGIN");
+      try {
+        await this.client.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+        await this.client.query(`SET statement_timeout = ${timeoutMs}`);
+        await this.client.query(`LOCK TABLE ${input.target.sql}`);
+        let preconditionRows: Record<string, unknown>[] = [];
+        if (input.backfillSql) {
+          if (!input.preconditionSql || !input.verificationSql) {
+            throw new Error("Stored backfill preconditions are unavailable.");
+          }
+          preconditionRows = (
+            await this.client.query(
+              boundedStructuredMutationSelect(
+                input.preconditionSql,
+                "redshift",
+                input.maximumRows,
+              ),
+            )
+          ).rows.map(normalizeRowValues);
+          assertMutationPreconditions(
+            preconditionRows,
+            input.expectedPreconditionRowHashes ?? input.expectedRowHashes,
+          );
+        }
+        if (!input.skipDdl) await this.client.query(input.ddlSql);
+        const changed = input.backfillSql
+          ? await this.client.query(input.backfillSql)
+          : null;
+        const rowCount = changed?.rowCount ?? 0;
+        assertAffectedRows(rowCount, input.expectedAffectedRows);
+        const evidence = await this.client.query<{ id: string }>(
+          "SELECT pg_last_query_id()::text AS id",
+        );
+        const providerExecutionId = evidence.rows[0]?.id;
+        if (!providerExecutionId)
+          throw new Error("Redshift DDL evidence is unavailable.");
+        const finalEvidence = input.verificationSql
+          ? verifiedRowEvidence(
+              (
+                await this.client.query(
+                  boundedStructuredMutationSelect(
+                    input.verificationSql,
+                    "redshift",
+                    input.maximumRows,
+                  ),
+                )
+              ).rows.map(normalizeRowValues),
+              input.expectedRowHashes,
+            )
+          : {};
+        await this.client.query("COMMIT");
+        return {
+          rowCount,
+          providerExecutionId,
+          verification: {
+            mode: "transactional_ddl",
+            locking: "table",
+            preconditionRows: preconditionRows.length,
+            ...finalEvidence,
+            phases: input.backfillSql
+              ? [
+                  input.skipDdl ? "column_already_added" : "column_added",
+                  "backfill_applied",
+                ]
+              : [
+                  input.operation === "rename_column"
+                    ? "renamed"
+                    : "column_added",
+                ],
+          },
+        };
+      } catch (error) {
+        await this.client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   private async executeWriteExclusive(

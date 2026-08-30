@@ -93,7 +93,7 @@ export function createDataSourceMcpServer(
       inputSchema: z.object({}),
       annotations: readOnlyAnnotations,
     },
-    async () => toolSuccess({ dataSources: registry.list() }),
+    async () => toolSuccess({ dataSources: await registry.list() }),
   );
 
   server.registerTool(
@@ -106,7 +106,7 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource }) => {
       try {
-        registry.get(dataSource);
+        await registry.get(dataSource);
         return toolSuccess({
           dataSource,
           connected: await registry.dataSource.testDataSource(dataSource),
@@ -127,7 +127,7 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, limit }) => {
       try {
-        const connection = registry.get(dataSource);
+        const connection = await registry.get(dataSource);
         const values = await registry.dataSource.getDatabases(dataSource, {
           limit: limit + 1,
           timeout: connection.policy.queryTimeoutMs,
@@ -157,7 +157,7 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, database, limit }) => {
       try {
-        const connection = registry.get(dataSource);
+        const connection = await registry.get(dataSource);
         const values = await registry.dataSource.getSchemas(
           dataSource,
           database,
@@ -192,7 +192,7 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, database, schema, limit }) => {
       try {
-        const connection = registry.get(dataSource);
+        const connection = await registry.get(dataSource);
         const values = await registry.dataSource.getTables(
           dataSource,
           database,
@@ -228,7 +228,7 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, database, schema, table }) => {
       try {
-        registry.get(dataSource);
+        await registry.get(dataSource);
         const columns = await registry.dataSource.getColumns(
           dataSource,
           database,
@@ -258,7 +258,7 @@ export function createDataSourceMcpServer(
     },
     async ({ dataSource, sql, maxRows, timeoutMs, requestId }) => {
       try {
-        const connection = registry.get(dataSource);
+        const connection = await registry.get(dataSource);
         const result = await registry.dataSource.execute({
           dataSource,
           sql,

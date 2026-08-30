@@ -1,6 +1,14 @@
 import type { DataSourceIntrospector } from "../introspection/base.js";
 import type { Credentials } from "../types/credentials.js";
 import type { QueryParameter } from "../types/query.js";
+import type {
+  ApplyControlledMutationInput,
+  ApplyControlledMutationResult,
+} from "../mutations/types.js";
+import type {
+  ApplyStructuredColumnChangeInput,
+  ApplyStructuredColumnChangeResult,
+} from "../mutations/structured-column-change.js";
 import { isValidCredentials } from "../utils/validate-credentials.js";
 
 /**
@@ -39,6 +47,9 @@ export interface AdapterQueryResult {
 
   /** Whether the results were limited */
   hasMoreRows?: boolean;
+
+  /** Provider dry-run bytes for an explicitly cost-bounded read. */
+  bytesProcessed?: string;
 }
 
 /**
@@ -66,6 +77,7 @@ export interface DatabaseAdapter {
     params?: QueryParameter[],
     maxRows?: number,
     timeout?: number,
+    maximumBytesBilled?: string,
   ): Promise<AdapterQueryResult>;
 
   /**
@@ -96,6 +108,20 @@ export interface DatabaseAdapter {
     params?: QueryParameter[],
     timeout?: number,
   ): Promise<{ rowCount: number }>;
+
+  applyControlledMutation?(
+    input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult>;
+
+  estimateControlledMutation?(input: {
+    canonicalSql: string;
+    params: QueryParameter[];
+    timeout?: number;
+  }): Promise<Record<string, unknown> | null>;
+
+  applyStructuredColumnChange?(
+    input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult>;
 }
 
 /**
@@ -118,6 +144,7 @@ export abstract class BaseAdapter implements DatabaseAdapter {
     _params?: QueryParameter[],
     _maxRows?: number,
     _timeout?: number,
+    _maximumBytesBilled?: string,
   ): Promise<AdapterQueryResult> {
     throw new Error(
       `${this.getDataSourceType()} does not provide database-enforced read-only query execution`,
@@ -137,6 +164,30 @@ export abstract class BaseAdapter implements DatabaseAdapter {
     _timeout?: number,
   ): Promise<{ rowCount: number }> {
     throw new Error("Write operations not implemented for this adapter");
+  }
+
+  async applyControlledMutation?(
+    _input: ApplyControlledMutationInput,
+  ): Promise<ApplyControlledMutationResult> {
+    throw new Error(
+      "Controlled mutations are not implemented for this adapter",
+    );
+  }
+
+  async applyStructuredColumnChange?(
+    _input: ApplyStructuredColumnChangeInput,
+  ): Promise<ApplyStructuredColumnChangeResult> {
+    throw new Error(
+      "Structured column changes are not implemented for this adapter",
+    );
+  }
+
+  async estimateControlledMutation?(_input: {
+    canonicalSql: string;
+    params: QueryParameter[];
+    timeout?: number;
+  }): Promise<Record<string, unknown> | null> {
+    return null;
   }
 
   /**

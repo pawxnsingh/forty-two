@@ -7,6 +7,8 @@ import { convertPositionalPlaceholders } from "../src/adapters/helpers/positiona
 import { MySQLAdapter } from "../src/adapters/mysql.js";
 import { PostgreSQLAdapter } from "../src/adapters/postgresql.js";
 import { RedshiftAdapter } from "../src/adapters/redshift.js";
+import { SnowflakeAdapter } from "../src/adapters/snowflake.js";
+import { SQLServerAdapter } from "../src/adapters/sqlserver.js";
 import { BigQueryIntrospector } from "../src/introspection/bigquery.js";
 import { MySQLIntrospector } from "../src/introspection/mysql.js";
 import { PostgreSQLIntrospector } from "../src/introspection/postgresql.js";
@@ -110,6 +112,10 @@ test("runs MySQL MCP reads inside a database-enforced read-only transaction", as
   Object.assign(adapter, {
     connected: true,
     connection: {
+      query(sql: string, callback: (error: null) => void) {
+        calls.push(sql);
+        callback(null);
+      },
       execute(
         sql: string,
         _params: unknown,
@@ -130,11 +136,217 @@ test("runs MySQL MCP reads inside a database-enforced read-only transaction", as
   ]);
 });
 
-test("connectors without a database read-only execution mode fail closed", async () => {
-  await assert.rejects(
-    new BigQueryAdapter().queryReadOnly("SELECT 1"),
-    /does not provide database-enforced read-only query execution/,
+test("normalizes missing MySQL field metadata for non-row results", async () => {
+  const adapter = new MySQLAdapter();
+  Object.assign(adapter, {
+    connected: true,
+    connection: {
+      execute(
+        _sql: string,
+        _params: unknown,
+        callback: (
+          error: null,
+          result: { affectedRows: number },
+          fields?: unknown[],
+        ) => void,
+      ) {
+        callback(null, { affectedRows: 1 });
+      },
+    },
+  });
+
+  const result = await adapter.query("UPDATE metrics SET value = 42");
+  assert.equal(result.rowCount, 1);
+  assert.deepEqual(result.fields, []);
+});
+
+test("runs Redshift MCP reads inside a database-enforced read-only transaction", async () => {
+  const adapter = new RedshiftAdapter();
+  const calls: string[] = [];
+  Object.assign(adapter, {
+    connected: true,
+    client: {
+      async query(sql: string) {
+        calls.push(sql);
+        return {
+          rows: sql === "SELECT 1" ? [{ value: 1 }] : [],
+          fields: [],
+          rowCount: sql === "SELECT 1" ? 1 : 0,
+        };
+      },
+    },
+  });
+
+  const result = await adapter.queryReadOnly(
+    "SELECT 1",
+    undefined,
+    undefined,
+    1_000,
   );
+  assert.deepEqual(result.rows, [{ value: 1 }]);
+  assert.deepEqual(calls, [
+    "BEGIN READ ONLY",
+    "SET statement_timeout = 1000",
+    "SELECT 1",
+    "ROLLBACK",
+  ]);
+});
+
+test("BigQuery MCP reads require a provider-classified SELECT dry run", async () => {
+  for (const statementType of ["UPDATE", undefined]) {
+    const adapter = new BigQueryAdapter();
+    let jobCount = 0;
+    Object.assign(adapter, {
+      connected: true,
+      client: {
+        async createQueryJob(options: { dryRun?: boolean }) {
+          jobCount += 1;
+          assert.equal(options.dryRun, true);
+          return [
+            {
+              async getMetadata() {
+                return [{ statistics: { query: { statementType } } }];
+              },
+            },
+          ];
+        },
+      },
+    });
+
+    await assert.rejects(
+      adapter.queryReadOnly("SELECT 1"),
+      /requires a SELECT job/,
+    );
+    assert.equal(jobCount, 1);
+  }
+
+  const adapter = new BigQueryAdapter();
+  const dryRuns: boolean[] = [];
+  Object.assign(adapter, {
+    connected: true,
+    client: {
+      async createQueryJob(options: { dryRun?: boolean }) {
+        dryRuns.push(options.dryRun === true);
+        if (options.dryRun) {
+          return [
+            {
+              async getMetadata() {
+                return [{ statistics: { query: { statementType: "SELECT" } } }];
+              },
+            },
+          ];
+        }
+        return [
+          {
+            async getQueryResults() {
+              return [[{ value: 1 }]];
+            },
+          },
+        ];
+      },
+    },
+  });
+
+  assert.deepEqual((await adapter.queryReadOnly("SELECT 1")).rows, [
+    { value: 1 },
+  ]);
+  assert.deepEqual(dryRuns, [true, false]);
+});
+
+test("BigQuery cost-bounded reads reject before payment and enforce maximumBytesBilled", async () => {
+  const adapter = new BigQueryAdapter();
+  const jobs: Array<{ dryRun: boolean; maximumBytesBilled?: string }> = [];
+  Object.assign(adapter, {
+    connected: true,
+    client: {
+      async createQueryJob(options: {
+        dryRun?: boolean;
+        maximumBytesBilled?: string;
+      }) {
+        jobs.push({
+          dryRun: options.dryRun === true,
+          ...(options.maximumBytesBilled
+            ? { maximumBytesBilled: options.maximumBytesBilled }
+            : {}),
+        });
+        if (options.dryRun) {
+          return [
+            {
+              async getMetadata() {
+                return [
+                  {
+                    statistics: {
+                      totalBytesProcessed: "200",
+                      query: { statementType: "SELECT" },
+                    },
+                  },
+                ];
+              },
+            },
+          ];
+        }
+        return [
+          {
+            async getQueryResults() {
+              return [[{ value: 1 }]];
+            },
+          },
+        ];
+      },
+    },
+  });
+
+  await assert.rejects(
+    adapter.queryReadOnly(
+      "SELECT value FROM large_table",
+      [],
+      10,
+      1_000,
+      "100",
+    ),
+    /cost limit/,
+  );
+  assert.deepEqual(jobs, [{ dryRun: true }]);
+  const result = await adapter.queryReadOnly(
+    "SELECT value FROM large_table",
+    [],
+    10,
+    1_000,
+    "300",
+  );
+  assert.equal(result.bytesProcessed, "200");
+  assert.deepEqual(jobs.slice(1), [
+    { dryRun: true },
+    { dryRun: false, maximumBytesBilled: "300" },
+  ]);
+});
+
+test("Snowflake read-only execution rejects implicit-commit DDL before connection use", async () => {
+  const adapter = new SnowflakeAdapter();
+  await assert.rejects(
+    adapter.queryReadOnly("CREATE TABLE forbidden (id NUMBER)"),
+    /Only SELECT statements are permitted/,
+  );
+});
+
+test("all six adapters define connector-specific read-only execution", () => {
+  for (const adapter of [
+    new PostgreSQLAdapter(),
+    new MySQLAdapter(),
+    new SQLServerAdapter(),
+    new SnowflakeAdapter(),
+    new BigQueryAdapter(),
+    new RedshiftAdapter(),
+  ]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        Object.getPrototypeOf(adapter),
+        "queryReadOnly",
+      ),
+      true,
+      `${adapter.constructor.name} must not inherit the base fail-closed stub`,
+    );
+  }
 });
 
 test("rejects SQL Server locking table hints", () => {

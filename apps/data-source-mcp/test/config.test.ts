@@ -7,6 +7,14 @@ import {
   parseConnections,
 } from "../src/config.js";
 
+const productEnvironment = {
+  MCP_AUTH_TOKEN: "test-token",
+  MCP_CONTROL_DATABASE_URL: "postgresql://control:secret@database/control",
+  DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString(
+    "base64",
+  ),
+};
+
 test("requires a service authentication token", () => {
   assert.throws(() => loadServerConfig({}), /MCP_AUTH_TOKEN is required/);
 });
@@ -14,7 +22,7 @@ test("requires a service authentication token", () => {
 test("keeps the maximum drain deadline below the Compose grace period", () => {
   assert.equal(
     loadServerConfig({
-      MCP_AUTH_TOKEN: "test-token",
+      ...productEnvironment,
       SHUTDOWN_TIMEOUT_MS: "20000",
     }).shutdownTimeoutMs,
     20_000,
@@ -22,16 +30,36 @@ test("keeps the maximum drain deadline below the Compose grace period", () => {
   assert.throws(
     () =>
       loadServerConfig({
-        MCP_AUTH_TOKEN: "test-token",
+        ...productEnvironment,
         SHUTDOWN_TIMEOUT_MS: "20001",
       }),
     /SHUTDOWN_TIMEOUT_MS/,
   );
 });
 
-test("loads server-side connection configuration without exposing defaults", () => {
+test("requires the control database and encryption key as a pair", () => {
+  for (const environment of [
+    { MCP_AUTH_TOKEN: "test-token" },
+    {
+      MCP_AUTH_TOKEN: "test-token",
+      MCP_CONTROL_DATABASE_URL: productEnvironment.MCP_CONTROL_DATABASE_URL,
+    },
+    {
+      MCP_AUTH_TOKEN: "test-token",
+      DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY:
+        productEnvironment.DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY,
+    },
+  ]) {
+    assert.throws(
+      () => loadServerConfig(environment),
+      /required for session authorization and dynamic datasources/,
+    );
+  }
+});
+
+test("loads only the dynamic product resolver", () => {
   const config = loadServerConfig({
-    MCP_AUTH_TOKEN: "test-token",
+    ...productEnvironment,
     PORT: "9000",
     DATA_SOURCE_CONNECTIONS_JSON: JSON.stringify([
       {
@@ -52,33 +80,11 @@ test("loads server-side connection configuration without exposing defaults", () 
   assert.equal(config.port, 9000);
   assert.deepEqual(config.allowedOrigins, []);
   assert.equal(config.shutdownTimeoutMs, 15_000);
-  assert.equal(config.connections[0]?.name, "analytics");
-  assert.deepEqual(config.connections[0]?.policy, {
-    maxRows: 250,
-    queryTimeoutMs: 15_000,
+  assert.deepEqual(config.connections, []);
+  assert.deepEqual(config.dynamic, {
+    controlDatabaseUrl: productEnvironment.MCP_CONTROL_DATABASE_URL,
+    encryptionKey: productEnvironment.DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY,
   });
-});
-
-test("provisions the Compose PostgreSQL source when no custom JSON is supplied", () => {
-  const config = loadServerConfig({
-    MCP_AUTH_TOKEN: "test-token",
-    PLATFORM_POSTGRES_HOST: "postgres",
-    PLATFORM_POSTGRES_PASSWORD: "database-secret",
-    PLATFORM_POSTGRES_DATABASE: "forty_two",
-  });
-
-  assert.equal(config.connections.length, 1);
-  assert.equal(config.connections[0]?.name, "local-postgres");
-  assert.equal(config.connections[0]?.type, "postgres");
-  const credentials = config.connections[0]?.credentials;
-  assert.equal(
-    credentials && "username" in credentials ? credentials.username : undefined,
-    "forty_two_reader",
-  );
-  assert.equal(
-    config.connections[0]?.credentials.default_database,
-    "forty_two",
-  );
 });
 
 test("normalizes allowed HTTP origins and rejects URL-like impostors", () => {
