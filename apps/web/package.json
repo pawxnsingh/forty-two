@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint --max-warnings 0",
     "check-types": "next typegen && tsc --noEmit",
+    "test": "pnpm test:chat-backend",
     "test:chat-backend": "node --import tsx --test lib/server/chat-backend.unit.test.ts"
   },
   "dependencies": {

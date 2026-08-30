@@ -7,6 +7,7 @@
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
+    "test:backend": "turbo run test --filter=web",
     "test:agent-spec": "node scripts/test-agent-spec.mjs",
     "test:integration-events": "node --test scripts/test-integration-events.mjs",
     "test:file-integration": "node --env-file-if-exists=.env scripts/test-file-integration.mjs",
