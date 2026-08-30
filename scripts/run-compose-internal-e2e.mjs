@@ -16,6 +16,18 @@ const script = process.argv[2];
 if (!allowedScripts.has(script)) {
   throw new Error("A supported internal E2E script path is required.");
 }
+const artifactFixtureSourcePath =
+  script === "scripts/test-artifact-backend-e2e.mjs"
+    ? process.env.COFFEE_SALES_CSV_PATH?.trim()
+    : undefined;
+if (
+  script === "scripts/test-artifact-backend-e2e.mjs" &&
+  !artifactFixtureSourcePath
+) {
+  throw new Error(
+    "COFFEE_SALES_CSV_PATH must point to the Coffee Sales CSV fixture for the artifact backend E2E.",
+  );
+}
 
 let helperHash;
 if (script === "scripts/test-artifact-helper-daytona-e2e.mjs") {
@@ -75,13 +87,10 @@ function runInsideWebContainer(webContainer, scriptPath) {
   ];
   let fixturePath;
   if (scriptPath === "scripts/test-artifact-backend-e2e.mjs") {
-    const sourcePath =
-      process.env.COFFEE_SALES_CSV_PATH?.trim() ||
-      "/home/pawxnsingh/Downloads/Coffee_Sales.csv";
     fixturePath = `/tmp/forty-two-coffee-sales-${process.pid}.csv`;
     const copied = spawnSync(
       "docker",
-      ["cp", sourcePath, `${webContainer}:${fixturePath}`],
+      ["cp", artifactFixtureSourcePath, `${webContainer}:${fixturePath}`],
       { stdio: "inherit" },
     );
     if (copied.error) throw copied.error;

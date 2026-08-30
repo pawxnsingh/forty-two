@@ -38,9 +38,7 @@ const mcpUrl = normalizeUrl(
 const databaseUrl = requiredEnvironment("DATABASE_URL");
 const signingKey = requiredEnvironment("MCP_CAPABILITY_SIGNING_KEY");
 const mcpAuthToken = requiredEnvironment("MCP_AUTH_TOKEN");
-const coffeePath =
-  process.env.COFFEE_SALES_CSV_PATH?.trim() ||
-  "/home/pawxnsingh/Downloads/Coffee_Sales.csv";
+const coffeePath = requiredEnvironment("COFFEE_SALES_CSV_PATH");
 const nonce = `artifact-e2e-${Date.now()}-${process.pid}`;
 const cleanupDataSourceIds = new Set();
 const cleanupSessionIds = new Set();

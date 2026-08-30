@@ -15,7 +15,7 @@
     "test:database-datasource-e2e": "node scripts/run-compose-internal-e2e.mjs scripts/test-database-datasource-e2e.mjs",
     "test:combined-flow-contract": "node --test scripts/test-combined-flow-contract.mjs",
     "test:chat-backend-e2e": "node scripts/run-compose-internal-e2e.mjs scripts/test-chat-backend-e2e.mjs",
-    "test:frontend-client": "node --test scripts/test-frontend-client-contract.mjs && node scripts/run-frontend-client-e2e.mjs",
+    "test:frontend-client": "pnpm --filter @repo/charting build && node --test scripts/test-frontend-client-contract.mjs && node scripts/run-frontend-client-e2e.mjs",
     "test:chat-backend-soak": "node scripts/run-chat-backend-soak.mjs",
     "test:platform-integration": "node scripts/run-compose-internal-e2e.mjs scripts/test-platform-integration.mjs",
     "test:plan-e2e": "node scripts/run-compose-internal-e2e.mjs scripts/test-plan-e2e.mjs",
