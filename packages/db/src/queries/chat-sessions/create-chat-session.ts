@@ -16,7 +16,7 @@ import {
 } from "./errors.js";
 import {
   canonicalizeChatSessionDataSourceIds,
-  hashChatSessionDataSourceIds,
+  hashChatSessionRequest,
 } from "./request-hash.js";
 import { parseChatSession, parseReturnedChatSession } from "./shared.js";
 
@@ -65,7 +65,12 @@ export async function createChatSession(
   }
 
   const requestHash = parsed.idempotencyKey
-    ? hashChatSessionDataSourceIds(canonicalDataSourceIds)
+    ? hashChatSessionRequest({
+        dataSourceIds: canonicalDataSourceIds,
+        maxDataSources: parsed.maxDataSources,
+        capabilityId: parsed.capabilityId,
+        capabilityExpiresAt: parsed.capabilityExpiresAt,
+      })
     : null;
 
   return getDatabase().transaction(async (transaction) => {

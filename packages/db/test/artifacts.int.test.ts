@@ -6,6 +6,7 @@ import postgres from "postgres";
 import {
   activateChatSession,
   analysisArtifactBlobBindingExists,
+  ArtifactCommitConflictError,
   closeDatabase,
   commitChartArtifact,
   commitTableArtifact,
@@ -330,6 +331,29 @@ describe("analysis artifact repositories against PostgreSQL", () => {
       1,
     );
     assert.equal((await commitTableArtifact(cases[0]!)).id, committed[0]!.id);
+  });
+
+  it("rejects an identical retry after the artifact is deleted", async () => {
+    const sessionId = await activeSession();
+    const input = tableInput({
+      sessionId,
+      idSeed: "deleted-retry",
+      contentSha256: "9".repeat(64),
+      operationKey: "query:99999999-9999-4999-8999-999999999999",
+    });
+    const artifact = await commitTableArtifact(input);
+    await sql`
+      update analysis_artifacts
+      set status = 'deleted',
+          deleted_at = current_timestamp,
+          retention_expires_at = current_timestamp + interval '7 days'
+      where id = ${artifact.id}
+    `;
+
+    await assert.rejects(
+      commitTableArtifact(input),
+      ArtifactCommitConflictError,
+    );
   });
 
   it("rolls back the ready artifact when external lease ownership is lost before commit", async () => {

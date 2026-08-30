@@ -169,6 +169,8 @@ async function insertOrReturnMatching(
   const retryProvenance = values.provenance;
   if (
     !row ||
+    row.status !== "ready" ||
+    row.deletedAt !== null ||
     row.id !== values.id ||
     row.contentSha256 !== values.contentSha256 ||
     row.schemaVersion !== values.schemaVersion ||

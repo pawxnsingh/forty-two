@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { ulid } from "ulid";
 import { z } from "zod";
 
-const ULID_PATTERN = "[0-9A-HJKMNP-TV-Z]{26}";
+const ULID_PATTERN = "[0-7][0-9A-HJKMNP-TV-Z]{25}";
 
 export const DataSourceIdSchema = z
   .string()
@@ -32,9 +32,7 @@ export type DataSourceId = z.infer<typeof DataSourceIdSchema>;
 export type ChatSessionId = z.infer<typeof ChatSessionIdSchema>;
 export type AnalysisArtifactId = z.infer<typeof AnalysisArtifactIdSchema>;
 export type SqlChangeSetId = z.infer<typeof SqlChangeSetIdSchema>;
-export type SqlChangeExecutionId = z.infer<
-  typeof SqlChangeExecutionIdSchema
->;
+export type SqlChangeExecutionId = z.infer<typeof SqlChangeExecutionIdSchema>;
 
 export function generateDataSourceId(): DataSourceId {
   return DataSourceIdSchema.parse(`ds_${ulid()}`);
@@ -54,22 +52,17 @@ export function generateSqlChangeExecutionId(): SqlChangeExecutionId {
 
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-function encodeCrockfordBase32(bytes: Uint8Array, length: number): string {
-  let bits = 0;
-  let value = 0;
+function encodeCrockfordUlid(bytes: Uint8Array): string {
+  if (bytes.length !== 16) throw new Error("ULID input must be 128 bits.");
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+
   let output = "";
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    bits += 8;
-    while (bits >= 5 && output.length < length) {
-      output += CROCKFORD_BASE32[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
+  for (let index = 0; index < 26; index += 1) {
+    output = CROCKFORD_BASE32[Number(value & 31n)] + output;
+    value >>= 5n;
   }
-  if (bits > 0 && output.length < length) {
-    output += CROCKFORD_BASE32[(value << (5 - bits)) & 31];
-  }
-  return output.slice(0, length);
+  return output;
 }
 
 /**
@@ -78,8 +71,9 @@ function encodeCrockfordBase32(bytes: Uint8Array, length: number): string {
  * makes identical payloads in different sessions unlinkable.
  */
 export function deriveAnalysisArtifactId(identity: string): AnalysisArtifactId {
-  const digest = createHash("sha256").update(identity, "utf8").digest();
-  return AnalysisArtifactIdSchema.parse(
-    `art_${encodeCrockfordBase32(digest, 26)}`,
-  );
+  const digest = createHash("sha256")
+    .update(identity, "utf8")
+    .digest()
+    .subarray(0, 16);
+  return AnalysisArtifactIdSchema.parse(`art_${encodeCrockfordUlid(digest)}`);
 }

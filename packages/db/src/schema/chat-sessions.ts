@@ -58,7 +58,7 @@ export const chatSessions = pgTable(
   (table) => [
     check(
       "chat_sessions_id_format_check",
-      sql`${table.id} ~ '^sess_[0-9A-HJKMNP-TV-Z]{26}$'`,
+      sql`${table.id} ~ '^sess_[0-7][0-9A-HJKMNP-TV-Z]{25}$'`,
     ),
     check(
       "chat_sessions_active_identifiers_check",

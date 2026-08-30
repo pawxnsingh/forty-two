@@ -15,10 +15,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import type {
-  ArtifactColumn,
-  ArtifactProvenance,
-} from "../artifact-types.js";
+import type { ArtifactColumn, ArtifactProvenance } from "../artifact-types.js";
 import { chatSessions } from "./chat-sessions.js";
 
 export const analysisArtifactKindEnum = pgEnum("analysis_artifact_kind", [
@@ -73,7 +70,7 @@ export const analysisArtifacts = pgTable(
   (table) => [
     check(
       "analysis_artifacts_id_format_check",
-      sql`${table.id} ~ '^art_[0-9A-HJKMNP-TV-Z]{26}$'`,
+      sql`${table.id} ~ '^art_[0-7][0-9A-HJKMNP-TV-Z]{25}$'`,
     ),
     check(
       "analysis_artifacts_hash_check",
@@ -192,7 +189,9 @@ export const analysisArtifactsRelations = relations(
       references: [chatSessions.id],
     }),
     parents: many(analysisArtifactLineage, { relationName: "artifactParents" }),
-    children: many(analysisArtifactLineage, { relationName: "artifactChildren" }),
+    children: many(analysisArtifactLineage, {
+      relationName: "artifactChildren",
+    }),
   }),
 );
 

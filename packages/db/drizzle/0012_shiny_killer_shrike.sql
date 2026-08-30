@@ -7,33 +7,35 @@ BEGIN
     INNER JOIN "sql_change_sets" AS change_set
       ON change_set."id" = execution."change_set_id"
     WHERE execution."executed_at" IS NOT NULL
-      AND execution."outcome" IS NULL
       AND (
-        (
-          change_set."status" = 'applied'
-          AND execution."provider_execution_id" IS NOT NULL
-          AND char_length(btrim(execution."provider_execution_id")) BETWEEN 1 AND 1024
-          AND execution."actual_affected_rows" = change_set."expected_affected_rows"
-          AND execution."error_code" IS NULL
-          AND execution."verification"->>'phase' = 'verified'
-        ) OR (
-          change_set."status" = 'partial'
-          AND execution."provider_execution_id" IS NOT NULL
-          AND char_length(btrim(execution."provider_execution_id")) BETWEEN 1 AND 1024
-          AND execution."actual_affected_rows" IS NULL
-          AND execution."error_code" = 'SqlChangePartialCommitError'
-          AND execution."verification" @> '{"phase":"partial_ddl_committed","ddlCommitted":true,"terminal":true,"freshApprovalRequired":true}'::jsonb
-          AND NOT (execution."verification" ? 'resumable')
-          AND NOT (execution."verification" ? 'requiresFreshApproval')
-        ) OR (
-          change_set."status" IN ('stale', 'failed')
-          AND execution."provider_execution_id" IS NULL
-          AND execution."actual_affected_rows" IS NULL
-          AND execution."error_code" IS NOT NULL
-          AND char_length(btrim(execution."error_code")) BETWEEN 1 AND 255
-          AND execution."verification"->>'phase' = 'failed'
-        )
-      ) IS NOT TRUE
+        execution."outcome" IS DISTINCT FROM change_set."status"
+        OR (
+          (
+            change_set."status" = 'applied'
+            AND execution."provider_execution_id" IS NOT NULL
+            AND char_length(btrim(execution."provider_execution_id")) BETWEEN 1 AND 1024
+            AND execution."actual_affected_rows" = change_set."expected_affected_rows"
+            AND execution."error_code" IS NULL
+            AND execution."verification"->>'phase' = 'verified'
+          ) OR (
+            change_set."status" = 'partial'
+            AND execution."provider_execution_id" IS NOT NULL
+            AND char_length(btrim(execution."provider_execution_id")) BETWEEN 1 AND 1024
+            AND execution."actual_affected_rows" IS NULL
+            AND execution."error_code" = 'SqlChangePartialCommitError'
+            AND execution."verification" @> '{"phase":"partial_ddl_committed","ddlCommitted":true,"terminal":true,"freshApprovalRequired":true}'::jsonb
+            AND NOT (execution."verification" ? 'resumable')
+            AND NOT (execution."verification" ? 'requiresFreshApproval')
+          ) OR (
+            change_set."status" IN ('stale', 'failed')
+            AND execution."provider_execution_id" IS NULL
+            AND execution."actual_affected_rows" IS NULL
+            AND execution."error_code" IS NOT NULL
+            AND char_length(btrim(execution."error_code")) BETWEEN 1 AND 255
+            AND execution."verification"->>'phase' = 'failed'
+          )
+        ) IS NOT TRUE
+      )
   ) THEN
     RAISE EXCEPTION USING
       ERRCODE = 'check_violation',

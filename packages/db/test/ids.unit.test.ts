@@ -3,9 +3,12 @@ import { describe, it } from "node:test";
 
 import {
   AnalysisArtifactIdSchema,
+  ChatSessionIdSchema,
   DataSourceIdSchema,
   deriveAnalysisArtifactId,
   generateDataSourceId,
+  SqlChangeExecutionIdSchema,
+  SqlChangeSetIdSchema,
 } from "../src/index.js";
 
 describe("datasource ID generation", () => {
@@ -25,6 +28,25 @@ describe("datasource ID generation", () => {
       false,
     );
     assert.equal(DataSourceIdSchema.safeParse("ds_not-a-ulid").success, false);
+    const schemas = [
+      [DataSourceIdSchema, "ds_"],
+      [ChatSessionIdSchema, "sess_"],
+      [AnalysisArtifactIdSchema, "art_"],
+      [SqlChangeSetIdSchema, "change_"],
+      [SqlChangeExecutionIdSchema, "changeexec_"],
+    ] as const;
+    for (const [schema, prefix] of schemas) {
+      assert.equal(
+        schema.safeParse(`${prefix}7${"Z".repeat(25)}`).success,
+        true,
+      );
+      for (const leading of ["8", "9", "A", "Z"]) {
+        assert.equal(
+          schema.safeParse(`${prefix}${leading}${"0".repeat(25)}`).success,
+          false,
+        );
+      }
+    }
   });
 });
 

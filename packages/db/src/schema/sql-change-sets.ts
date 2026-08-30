@@ -94,7 +94,7 @@ export const sqlChangeSets = pgTable(
   (table) => [
     check(
       "sql_change_sets_id_format_check",
-      sql`${table.id} ~ '^change_[0-9A-HJKMNP-TV-Z]{26}$'`,
+      sql`${table.id} ~ '^change_[0-7][0-9A-HJKMNP-TV-Z]{25}$'`,
     ),
     check(
       "sql_change_sets_connector_check",
@@ -103,6 +103,17 @@ export const sqlChangeSets = pgTable(
     check(
       "sql_change_sets_dialect_check",
       sql`${table.sqlDialect} IN ('postgresql','mysql','transactsql','snowflake','bigquery','redshift')`,
+    ),
+    check(
+      "sql_change_sets_connector_dialect_check",
+      sql`(${table.connectorType}, ${table.sqlDialect}) IN (
+        ('postgresql','postgresql'),
+        ('mysql','mysql'),
+        ('sqlserver','transactsql'),
+        ('snowflake','snowflake'),
+        ('bigquery','bigquery'),
+        ('redshift','redshift')
+      )`,
     ),
     check(
       "sql_change_sets_text_check",
@@ -195,7 +206,7 @@ export const sqlChangeExecutions = pgTable(
   (table) => [
     check(
       "sql_change_executions_id_format_check",
-      sql`${table.id} ~ '^changeexec_[0-9A-HJKMNP-TV-Z]{26}$'`,
+      sql`${table.id} ~ '^changeexec_[0-7][0-9A-HJKMNP-TV-Z]{25}$'`,
     ),
     check(
       "sql_change_executions_ids_check",

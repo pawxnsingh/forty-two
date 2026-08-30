@@ -139,13 +139,18 @@ async function createReadyDatabase(): Promise<DataSource> {
 
 async function createSession(
   dataSourceIds: DataSource["id"][],
-  options: { idempotencyKey?: string; maxDataSources?: number } = {},
+  options: {
+    idempotencyKey?: string;
+    maxDataSources?: number;
+    capabilityId?: string;
+    capabilityExpiresAt?: Date;
+  } = {},
 ) {
   return createChatSession({
     dataSourceIds,
     maxDataSources: options.maxDataSources ?? 10,
-    capabilityId: nextValue("capability"),
-    capabilityExpiresAt: futureExpiry(),
+    capabilityId: options.capabilityId ?? nextValue("capability"),
+    capabilityExpiresAt: options.capabilityExpiresAt ?? futureExpiry(),
     idempotencyKey: options.idempotencyKey,
   });
 }
@@ -365,11 +370,17 @@ describe("chat session repositories against PostgreSQL", () => {
     const database = await createReadyDatabase();
     const other = await createReadyFile();
     const idempotencyKey = nextValue("idempotency-key");
+    const capabilityId = nextValue("idempotent-capability");
+    const capabilityExpiresAt = futureExpiry();
     const first = await createSession([file.id, database.id], {
       idempotencyKey,
+      capabilityId,
+      capabilityExpiresAt,
     });
     const retry = await createSession([database.id, file.id, file.id], {
       idempotencyKey,
+      capabilityId,
+      capabilityExpiresAt,
     });
 
     assert.equal(first.created, true);
@@ -382,7 +393,36 @@ describe("chat session repositories against PostgreSQL", () => {
     assert.match(first.chatSession.idempotencyRequestHash!, /^[0-9a-f]{64}$/);
 
     await assert.rejects(
-      createSession([file.id, other.id], { idempotencyKey }),
+      createSession([file.id, other.id], {
+        idempotencyKey,
+        capabilityId,
+        capabilityExpiresAt,
+      }),
+      ChatSessionIdempotencyConflictError,
+    );
+    await assert.rejects(
+      createSession([file.id, database.id], {
+        idempotencyKey,
+        capabilityId: `${capabilityId}-changed`,
+        capabilityExpiresAt,
+      }),
+      ChatSessionIdempotencyConflictError,
+    );
+    await assert.rejects(
+      createSession([file.id, database.id], {
+        idempotencyKey,
+        maxDataSources: 9,
+        capabilityId,
+        capabilityExpiresAt,
+      }),
+      ChatSessionIdempotencyConflictError,
+    );
+    await assert.rejects(
+      createSession([file.id, database.id], {
+        idempotencyKey,
+        capabilityId,
+        capabilityExpiresAt: new Date(capabilityExpiresAt.getTime() + 1_000),
+      }),
       ChatSessionIdempotencyConflictError,
     );
     assert.deepEqual(
@@ -393,12 +433,18 @@ describe("chat session repositories against PostgreSQL", () => {
     );
 
     const concurrentKey = nextValue("concurrent-idempotency-key");
+    const concurrentCapabilityId = nextValue("concurrent-capability");
+    const concurrentCapabilityExpiresAt = futureExpiry();
     const concurrentResults = await Promise.all([
       createSession([file.id, database.id], {
         idempotencyKey: concurrentKey,
+        capabilityId: concurrentCapabilityId,
+        capabilityExpiresAt: concurrentCapabilityExpiresAt,
       }),
       createSession([database.id, file.id], {
         idempotencyKey: concurrentKey,
+        capabilityId: concurrentCapabilityId,
+        capabilityExpiresAt: concurrentCapabilityExpiresAt,
       }),
     ]);
     assert.equal(

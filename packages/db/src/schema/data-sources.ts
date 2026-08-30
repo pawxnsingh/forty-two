@@ -74,7 +74,7 @@ export const dataSources = pgTable(
   (table) => [
     check(
       "data_sources_id_format_check",
-      sql`${table.id} ~ '^ds_[0-9A-HJKMNP-TV-Z]{26}$'`,
+      sql`${table.id} ~ '^ds_[0-7][0-9A-HJKMNP-TV-Z]{25}$'`,
     ),
     check(
       "data_sources_name_nonempty_check",

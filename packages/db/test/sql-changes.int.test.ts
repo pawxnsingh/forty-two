@@ -10,6 +10,7 @@ import {
   closeDatabase,
   completeSqlChangeApply,
   CompleteSqlChangeApplyInputSchema,
+  CreateSqlChangeSetInputSchema,
   createChatSession,
   createDatabaseDataSource,
   createSqlChangeSet,
@@ -80,6 +81,47 @@ describe("approval-gated SQL change repositories", () => {
       await admin`drop database if exists ${admin(databaseName)} with (force)`;
       await admin.end({ timeout: 5 });
     }
+  });
+
+  it("requires the SQL dialect to match the datasource connector", () => {
+    const input = {
+      id: `change_${"0".repeat(26)}`,
+      chatSessionId: `sess_${"0".repeat(26)}`,
+      dataSourceId: `ds_${"0".repeat(26)}`,
+      connectorType: "postgresql" as const,
+      sqlDialect: "postgresql" as const,
+      operation: "update" as const,
+      targetCatalog: null,
+      targetSchema: "demo",
+      targetTable: "metrics",
+      canonicalSql: "UPDATE demo.metrics SET value = 1",
+      boundParameters: [],
+      structuredOperation: null,
+      statementHash: "a".repeat(64),
+      preview: {},
+      preconditions: {},
+      executionStrategy: {},
+      resourceEstimate: null,
+      expectedAffectedRows: 1,
+      credentialRevision: 1,
+    };
+
+    assert.equal(CreateSqlChangeSetInputSchema.safeParse(input).success, true);
+    assert.equal(
+      CreateSqlChangeSetInputSchema.safeParse({
+        ...input,
+        sqlDialect: "mysql",
+      }).success,
+      false,
+    );
+    assert.equal(
+      CreateSqlChangeSetInputSchema.safeParse({
+        ...input,
+        connectorType: "sqlserver",
+        sqlDialect: "transactsql",
+      }).success,
+      true,
+    );
   });
 
   it("stores immutable approval display, resumes one implicit execution, and blocks replay", async () => {
@@ -583,6 +625,18 @@ describe("approval-gated SQL change repositories", () => {
         WHERE id = ${executionId}
       `;
       assert.equal(ambiguous[0]?.outcome, null);
+
+      await direct`
+        UPDATE sql_change_executions
+        SET outcome = 'failed',
+            error_code = NULL,
+            verification = '{"phase":"failed"}'::jsonb
+        WHERE id = ${executionId}
+      `;
+      await assert.rejects(
+        direct.unsafe(migrationSql),
+        /Cannot infer SQL execution outcome from authoritative status and provider evidence/,
+      );
 
       await direct`
         UPDATE sql_change_executions

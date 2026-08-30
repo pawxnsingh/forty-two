@@ -15,11 +15,27 @@ export function canonicalizeChatSessionDataSourceIds(
   return [...new Set(parsed)].sort();
 }
 
-export function hashChatSessionDataSourceIds(
-  dataSourceIds: readonly DataSourceId[],
+export interface HashChatSessionRequestInput {
+  dataSourceIds: readonly DataSourceId[];
+  maxDataSources: number;
+  capabilityId: string;
+  capabilityExpiresAt: Date;
+}
+
+export function hashChatSessionRequest(
+  input: HashChatSessionRequestInput,
 ): string {
-  const canonicalIds = canonicalizeChatSessionDataSourceIds(dataSourceIds);
+  const canonicalIds = canonicalizeChatSessionDataSourceIds(
+    input.dataSourceIds,
+  );
   return createHash("sha256")
-    .update(JSON.stringify({ dataSourceIds: canonicalIds }))
+    .update(
+      JSON.stringify({
+        dataSourceIds: canonicalIds,
+        maxDataSources: input.maxDataSources,
+        capabilityId: input.capabilityId,
+        capabilityExpiresAt: input.capabilityExpiresAt.toISOString(),
+      }),
+    )
     .digest("hex");
 }

@@ -20,15 +20,25 @@ import {
   SqlBoundParameterSchema,
   SqlChangeOperationSchema,
   SqlDialectSchema,
+  type SqlDialect,
   type SqlChangeSet,
 } from "../../sql-change-types.js";
 import {
   DatabaseConnectorTypeSchema,
   resolveDatabaseMutationTarget,
+  type DatabaseConnectorType,
 } from "../../types.js";
 import { parseSqlChangeSet, SqlChangeConflictError } from "./shared.js";
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
+const SQL_DIALECT_BY_CONNECTOR = {
+  postgresql: "postgresql",
+  mysql: "mysql",
+  sqlserver: "transactsql",
+  snowflake: "snowflake",
+  bigquery: "bigquery",
+  redshift: "redshift",
+} as const satisfies Record<DatabaseConnectorType, SqlDialect>;
 
 export const CreateSqlChangeSetInputSchema = z
   .object({
@@ -52,7 +62,16 @@ export const CreateSqlChangeSetInputSchema = z
     expectedAffectedRows: z.number().int().min(0).max(100),
     credentialRevision: z.number().int().positive(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (SQL_DIALECT_BY_CONNECTOR[value.connectorType] !== value.sqlDialect) {
+      context.addIssue({
+        code: "custom",
+        path: ["sqlDialect"],
+        message: "SQL dialect does not match the datasource connector.",
+      });
+    }
+  });
 
 export type CreateSqlChangeSetInput = z.input<
   typeof CreateSqlChangeSetInputSchema
