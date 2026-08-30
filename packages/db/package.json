@@ -21,7 +21,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=../../.env --import tsx src/migrate-cli.ts",
     "pretest": "pnpm build",
-    "test": "node --import tsx --test test/*.unit.test.ts",
+    "test": "pnpm test:unit && pnpm test:integration",
+    "test:unit": "node --import tsx --test test/*.unit.test.ts",
     "test:integration": "node --env-file-if-exists=../../.env --import tsx --test test/*.int.test.ts"
   },
   "dependencies": {
