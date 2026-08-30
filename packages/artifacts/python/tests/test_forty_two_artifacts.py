@@ -293,6 +293,11 @@ class HelperTests(unittest.TestCase):
         ).decode()
         with mock.patch.dict(os.environ, {"TFY_MCP_SERVERS": encoded}):
             self.assertEqual(MODULE._mcp_server_name(), "forty-two-data-source")
+        for malformed in ([], "bad", None, 42):
+            encoded = base64.b64encode(json.dumps(malformed).encode()).decode()
+            with mock.patch.dict(os.environ, {"TFY_MCP_SERVERS": encoded}):
+                with self.assertRaisesRegex(RuntimeError, "malformed"):
+                    MODULE._mcp_server_name()
 
     def test_visualize_returns_bounded_hash_bound_receipt_without_rows(self) -> None:
         descriptor = {

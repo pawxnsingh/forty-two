@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { isCanonicalDatetimeString } from "@forty-two/artifacts";
+import {
+  isCanonicalDatetimeString,
+  MAX_ARTIFACT_STRING_BYTES,
+} from "@forty-two/artifacts";
 
 import {
   GoalLineSchema,
@@ -385,9 +388,16 @@ function chartCellMatchesColumn(
   if (value === null) return column.nullable;
   switch (column.type) {
     case "string":
-      return typeof value === "string";
+      return (
+        typeof value === "string" &&
+        Buffer.byteLength(value, "utf8") <= MAX_ARTIFACT_STRING_BYTES
+      );
     case "number":
-      return typeof value === "number" && Number.isFinite(value);
+      return (
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        (!Number.isInteger(value) || Number.isSafeInteger(value))
+      );
     case "integer":
       return column.encoding === "string"
         ? typeof value === "string" && /^-?\d+$/.test(value)
@@ -410,14 +420,18 @@ function isJsonValue(
   value: unknown,
   ancestors: Set<object> = new Set(),
 ): boolean {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
+  if (value === null || typeof value === "boolean") {
     return true;
   }
-  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") {
+    return Buffer.byteLength(value, "utf8") <= MAX_ARTIFACT_STRING_BYTES;
+  }
+  if (typeof value === "number") {
+    return (
+      Number.isFinite(value) &&
+      (!Number.isInteger(value) || Number.isSafeInteger(value))
+    );
+  }
   if (typeof value !== "object") return false;
   if (ancestors.has(value)) return false;
   const prototype = Object.getPrototypeOf(value);

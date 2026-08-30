@@ -128,6 +128,9 @@ function canonicalJsonValue(value: unknown, path: string): unknown {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return null;
+    if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      throw new Error(`${path} contains an unsafe integer number.`);
+    }
     return Object.is(value, -0) ? 0 : value;
   }
   if (typeof value === "boolean") return value;
@@ -172,8 +175,12 @@ function assertCellMatchesColumn(
         throw new Error(`${path} must be a string.`);
       return;
     case "number":
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        throw new Error(`${path} must be a finite number.`);
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        (Number.isInteger(value) && !Number.isSafeInteger(value))
+      ) {
+        throw new Error(`${path} must be a finite safe number.`);
       }
       return;
     case "integer":

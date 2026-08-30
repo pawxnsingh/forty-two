@@ -75,6 +75,19 @@ describe("canonical table.v1", () => {
         }),
       /64 KiB/,
     );
+    for (const [type, value] of [
+      ["number", Number.MAX_SAFE_INTEGER + 1],
+      ["json", { nested: Number.MAX_SAFE_INTEGER + 1 }],
+    ] as const) {
+      assert.throws(
+        () =>
+          serializeCanonicalTableV1({
+            columns: [{ name: "x", type, nullable: false }],
+            rows: [{ x: value }],
+          }),
+        /safe|unsafe/,
+      );
+    }
     assert.throws(
       () => parseCanonicalTableV1(Buffer.alloc(MAX_ARTIFACT_BYTES + 1)),
       /5 MiB/,
@@ -238,10 +251,10 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 class Frame:
-    columns = ["tiny", "threshold", "whole", "large"]
+    columns = ["tiny", "threshold", "whole"]
     index = range(1)
     def itertuples(self, index=False, name=None):
-        return iter([(1e-7, 1e-6, 1.0, 1e20)])
+        return iter([(1e-7, 1e-6, 1.0)])
 payload, _columns, _rows = module._canonicalize_dataframe(Frame())
 print(base64.b64encode(payload).decode("ascii"))
 `,
@@ -249,12 +262,12 @@ print(base64.b64encode(payload).decode("ascii"))
     assert.equal(python.status, 0, python.stderr);
     const pythonBytes = Buffer.from(python.stdout.trim(), "base64");
     const typescript = serializeCanonicalTableV1({
-      columns: ["tiny", "threshold", "whole", "large"].map((name) => ({
+      columns: ["tiny", "threshold", "whole"].map((name) => ({
         name,
         type: "number" as const,
         nullable: false,
       })),
-      rows: [{ tiny: 1e-7, threshold: 1e-6, whole: 1, large: 1e20 }],
+      rows: [{ tiny: 1e-7, threshold: 1e-6, whole: 1 }],
     });
     assert.equal(
       pythonBytes.toString("utf8"),

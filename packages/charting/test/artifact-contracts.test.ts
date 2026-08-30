@@ -315,6 +315,8 @@ describe("chart.v1 server contracts", () => {
       1n,
       new Date(),
       { nested: Number.NaN },
+      { nested: Number.MAX_SAFE_INTEGER + 1 },
+      { nested: "x".repeat(64 * 1024 + 1) },
       cyclic,
       symbolKeyed,
       sparse,
@@ -323,6 +325,20 @@ describe("chart.v1 server contracts", () => {
         ChartArtifactEnvelopeV1Schema.safeParse({
           ...envelope,
           data: [{ payload }],
+        }).success,
+        false,
+      );
+    }
+
+    for (const [type, value] of [
+      ["string", "x".repeat(64 * 1024 + 1)],
+      ["number", Number.MAX_SAFE_INTEGER + 1],
+    ] as const) {
+      assert.equal(
+        ChartArtifactEnvelopeV1Schema.safeParse({
+          ...envelope,
+          columns: [{ name: "payload", type, nullable: false }],
+          data: [{ payload: value }],
         }).success,
         false,
       );

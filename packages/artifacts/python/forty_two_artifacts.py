@@ -163,6 +163,8 @@ def _mcp_server_name() -> str:
         servers = json.loads(base64.b64decode(encoded).decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("TFY_MCP_SERVERS is malformed") from exc
+    if not isinstance(servers, dict):
+        raise RuntimeError("TFY_MCP_SERVERS is malformed")
     config = servers.get(SHARED_MCP_SERVER)
     if not isinstance(config, dict):
         raise RuntimeError(
