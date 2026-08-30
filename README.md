@@ -1,31 +1,85 @@
-# Turborepo starter
+# Forty Two
 
-This Turborepo starter is maintained by the Turborepo core team.
+Forty Two is a conversational analytics workspace built for the TrueForge Agent Harness Hackathon. Connect a file, operational database, or warehouse; open a datasource-bound session; ask a question; and receive a durable answer with inspectable execution, tables, and interactive charts.
 
-## Local Docker stack
+The browser talks only to the Forty Two gateway. TrueForge, the datasource MCP service, the Todo MCP service, database credentials, artifact storage credentials, and Daytona control-plane operations remain server-side.
 
-The root Compose project runs the Next.js application, hosted-mode TrueForge,
-the Forty Two datasource and Todo MCP services, PostgreSQL, MySQL, SQL Server,
-and Redis. Next.js and TrueForge share the `forty_two` PostgreSQL database.
-TrueForge is built from the pinned `vendor/trueforge` submodule.
+## Product flow
 
-Initialize the submodule after cloning:
+1. Add CSV, Excel, PostgreSQL, MySQL, SQL Server, Snowflake, BigQuery, or Redshift from the connector marketplace.
+2. Start a conversation from a ready connector. The session receives an immutable datasource binding.
+3. Ask an analytical question. TrueForge runs the registered Forty Two agent and streams normalized public events through the gateway.
+4. Follow the visible plan and execution activity. Controlled SQL mutations stop for an explicit, scoped approval.
+5. Inspect committed tables and charts. Artifact capabilities are read-only, session-scoped, expiring, and renewable.
+6. Reopen the session later. Conversation history, plans, datasource labels, and committed artifacts are durable.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Browser[Forty Two web app] -->|public session APIs + SSE| Web[Next.js gateway]
+  Web -->|SDK| TrueForge[TrueForge Agent Harness]
+  TrueForge --> Todo[Todo MCP]
+  TrueForge --> Data[Datasource MCP]
+  TrueForge --> Daytona[Daytona sandbox]
+  Web --> DB[(PostgreSQL control database)]
+  Todo --> DB
+  Data --> DB
+  Data --> Sources[(Bound files and databases)]
+  Data --> Azure[(Committed artifact storage)]
+  Web -->|capability-protected reads| Azure
+```
+
+### Why TrueForge matters
+
+- TrueForge owns agent sessions, turns, tool execution, approval continuation, normalized lifecycle events, and Daytona sandbox orchestration.
+- The agent uses two authenticated internal MCP servers: one for durable plans and one for session-scoped datasource, SQL, file, table, and chart operations.
+- The web application does not impersonate the agent or execute analytical SQL itself. It maps product session IDs to private runtime sessions and presents a redacted, replayable event contract.
+- Daytona receives the immutable sandbox image containing the artifact helper. Files move directly from scoped storage into the sandbox; their bytes do not transit the browser or TrueForge message payloads.
+
+## Repository map
+
+| Path | Responsibility |
+| --- | --- |
+| `apps/web` | Product UI, public gateway APIs, SSE, artifact presentation |
+| `apps/data-source-mcp` | Authenticated datasource, SQL, file and artifact MCP tools |
+| `apps/todo-mcp` | Durable session-plan MCP tools |
+| `packages/db` | Database schema, repositories, capabilities and audit state |
+| `packages/data-source` | Connector adapters and SQL safety policy |
+| `packages/artifacts` | Canonical table payload and helper contracts |
+| `packages/charting` | Seven chart renderers and interactive ChartCard |
+| `packages/design-tokens` | Semantic visual tokens and governed fonts |
+| `packages/ui-web` | Accessible web primitives |
+| `packages/app-shell` | Responsive application shell |
+| `docker/trueforge` | Hosted-mode TrueForge image |
+| `docker/sandbox` | Immutable Daytona analysis image |
+
+## Run locally
+
+Requirements:
+
+- Node.js 24 or later
+- pnpm 9.15.9
+- Docker with Compose
+- Azure Blob Storage credentials
+- Daytona and OpenAI API credentials
+- A published immutable sandbox image digest
+
+Initialize the TrueForge submodule and install dependencies:
 
 ```sh
 git submodule update --init --recursive
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-Copy `.env.example` to `.env`, then set every required value listed below.
-Compose fails fast when any is missing. Use a different long, unique value for
-each password, token, and key; `openssl rand -hex 32` produces URL-safe
-local-development secrets. SQL Server's `SQLSERVER_SA_PASSWORD` must also meet
-SQL Server's password-complexity policy.
+Create the environment file:
 
 ```sh
 cp .env.example .env
 ```
 
-Required database credentials:
+Set unique values for the required credentials:
 
 ```text
 POSTGRES_PASSWORD
@@ -39,11 +93,6 @@ MYSQL_WRITER_PASSWORD
 SQLSERVER_SA_PASSWORD
 SQLSERVER_READER_PASSWORD
 SQLSERVER_WRITER_PASSWORD
-```
-
-Required platform, MCP, storage, and model values:
-
-```text
 DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY
 MCP_AUTH_TOKEN
 MCP_CAPABILITY_SIGNING_KEY
@@ -56,280 +105,103 @@ OPENAI_API_KEY
 PLATFORM_SANDBOX_IMAGE_URI
 ```
 
-The owner database credentials remain separate from the read-only, writer,
-controlled-mutation, and MCP control-plane roles. `MCP_AUTH_TOKEN` authenticates
-only internal service-to-service calls to the shared datasource MCP;
-`MCP_CAPABILITY_SIGNING_KEY` signs browser artifact-read capabilities and must
-be generated independently.
+Every token, key, and password must be independently generated. SQL Server credentials must satisfy its password-complexity policy.
 
-Before building TrueForge, publish the custom Daytona sandbox image from
-`docker/sandbox/Dockerfile` to a registry Daytona can pull. Resolve the pushed
-image to its immutable registry digest and set `PLATFORM_SANDBOX_IMAGE_URI` to
-the full `registry/repository@sha256:...` reference. Mutable tags are rejected
-because every product sandbox must use the exact helper image registered at
-bootstrap.
+### Publish the Daytona sandbox
+
+Daytona must be able to pull the custom sandbox by immutable digest:
 
 ```sh
-docker build -f docker/sandbox/Dockerfile -t registry.example.com/forty-two-sandbox:local .
-docker push registry.example.com/forty-two-sandbox:local
-docker buildx imagetools inspect registry.example.com/forty-two-sandbox:local
+docker build -f docker/sandbox/Dockerfile -t registry.example.com/forty-two-sandbox:demo .
+docker push registry.example.com/forty-two-sandbox:demo
+docker buildx imagetools inspect registry.example.com/forty-two-sandbox:demo
 ```
 
-After copying the reported digest into `.env`, build the stack (including the
-TrueForge image that embeds that immutable sandbox reference) and recreate the
-services:
+Set `PLATFORM_SANDBOX_IMAGE_URI` to the resulting `registry/repository@sha256:...` value. Mutable tags are rejected during bootstrap.
+
+### Start the product
 
 ```sh
 docker compose build
 docker compose up -d --force-recreate
+docker compose ps
 ```
 
-A plain `docker compose up` cannot bootstrap a fresh deployment until the
-custom sandbox has been published and `PLATFORM_SANDBOX_IMAGE_URI` contains its
-immutable digest.
+Open [http://localhost:3000](http://localhost:3000). The web container runs a prebuilt production Next.js standalone server. TrueForge and both MCP services are internal-only; the public web port is loopback-bound by default.
 
-The one-shot `trueforge-bootstrap` service configures OpenAI, Daytona, the Todo
-connector, and exactly one shared internal `forty-two-data-source` connector,
-then creates or updates the named `forty-two-data-agent`. The connector uses
-the server-only `MCP_AUTH_TOKEN`; every datasource, file, database, artifact,
-chart, and SQL tool also validates its explicit active application session and
-immutable datasource bindings before accessing secrets, SAS URLs, or state.
-TrueForge is an internal control plane with no host-published port; Next.js is
-the only public/control-plane HTTP gateway used by judges and browsers. The
-demo databases remain loopback-published for local connector E2E tests.
-
-Datasource connections are registered through the server-side datasource API
-and persisted under public `ds_` identifiers before they can be bound to a chat
-session. The authenticated MCP bridge resolves only those exact, ready session
-bindings; Compose does not inject an unscoped static datasource alias.
-
-After the stack is healthy, run the live integration check:
-
-```sh
-pnpm test:control-plane-isolation
-pnpm test:platform-integration
-```
-
-The first command proves the host cannot reach TrueForge and the public
-Next.js session API rejects raw AgentSpecs and connector names. The second runs
-inside the Compose network and proves that the shared service-token transport
-cannot access a missing, inactive, deleted, or unbound application session.
-
-The Next.js backend is the only public/control-plane HTTP gateway. It creates
-datasource-bound sessions, accepts JSON turns, waits for completion, and
-returns events through `/api/chat/sessions`. Public requests cannot supply raw
-AgentSpecs or connector names; the backend constructs those control-plane
-objects internally.
-
-Run the complete frontend-facing backend test with the stack healthy:
-
-```sh
-pnpm test:chat-backend-e2e
-```
-
-This live test runs from the internal web container while calling the Next.js
-product API. It proves a randomized Azure file download into Daytona, exact
-ETag and byte-size checks, a session-scoped PostgreSQL query, cross-session
-denial, and cleanup/revocation without exposing TrueForge on the host.
-
-- Next.js: http://localhost:3000
-- Postgres: `localhost:5432`, database `forty_two`
-- MySQL: `localhost:3306`, database `forty_two_demo`
-- SQL Server: `localhost:1433`, database `forty_two_demo`
-
-Stop the stack without deleting persisted data:
+Stop without deleting persisted data:
 
 ```sh
 docker compose down
 ```
 
-### Manual file datasource blob cleanup
+## Verification
 
-To retry pending cleanup for already-deleted file datasources on demand, run:
-
-```sh
-pnpm --filter web sweep:file-datasource-blobs
-```
-
-Each invocation claims at most 25 pending, already-soft-deleted file rows and
-makes one exact-name, ETag-conditional Azure delete attempt per claimed row.
-Set `FILE_DATASOURCE_CLEANUP_BATCH_SIZE` to an integer from 1 through 100 to
-tune the per-run bound. Concurrent invocations are safe: PostgreSQL row locks
-skip work already claimed by another process. A crash rolls the claim back, so
-the next manual run resumes it; terminal deleted, missing, and superseded
-rows are idempotently excluded. The JSON result contains aggregate progress
-only and never emits blob names, ETags, SAS URLs, or account credentials.
-For targeted remediation, set the optional comma-separated
-`FILE_DATASOURCE_CLEANUP_DATA_SOURCE_IDS` (at most 100 valid `ds_` IDs); the
-same exact-row state machine runs without scanning or deleting a blob prefix.
-
-If an older local `postgres_data` volume was initialized with a different
-password, either update that Postgres role or remove only that development
-volume after `docker compose down`. Removing `forty-two_postgres_data`
-permanently deletes the local database; never do this when its data is needed.
-
-The Next.js and database ports listed above bind to `127.0.0.1`. The database
-ports exist only for local connector E2E tests; they are not public HTTP or
-control-plane APIs. TrueForge and both MCP services are intentionally
-internal-only. Datasource MCP transport is authenticated by the server-only
-service token and every tool validates the active session and its bindings.
-Public session IDs are routing and correctness context, not tenant secrets or
-authentication. The separate `ftart1` browser capability is scoped only to
-read-only artifact list/detail/download APIs; it cannot call MCP tools or other
-control-plane endpoints.
-
-## Using this example
-
-Run the following command:
+Fast checks:
 
 ```sh
-npx create-turbo@latest
+pnpm check-types
+pnpm lint
+pnpm build
+pnpm --filter @repo/design-tokens validate
+pnpm --filter @repo/ui-web test
+pnpm --filter @repo/charting test
+pnpm --filter web test:chat-client
+pnpm --filter web test:turn-events
+pnpm --filter web test:chat-backend
+pnpm --filter web test:artifacts
+pnpm --filter @forty-two/data-source-mcp test
 ```
 
-## What's inside?
-
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+Live stack checks:
 
 ```sh
-cd my-turborepo
-turbo build
+pnpm test:control-plane-isolation
+pnpm test:platform-integration
+pnpm test:chat-backend-e2e
+pnpm test:frontend-client
+pnpm test:plan-e2e
+pnpm test:artifact-backend-e2e
+pnpm test:sql-change-approval-e2e
 ```
 
-Without global `turbo`, use your package manager:
+The live suites verify datasource isolation, browser contract replay, plans, approvals, committed artifact integrity, cleanup, and revocation. Credential-gated warehouse checks require their provider credentials.
 
-```sh
-cd my-turborepo
-npx turbo build
-pnpm dlx turbo build
-pnpm exec turbo build
-```
+## Security boundaries
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+- Public requests cannot provide raw AgentSpecs, internal connector names, runtime IDs, MCP service tokens, SQL approval arguments, or storage credentials.
+- Sessions bind only ready datasource IDs and cannot change bindings after creation.
+- Datasource MCP tools validate both service authentication and the active session binding.
+- Read queries and controlled mutations have separate tools and policies. Applying a mutation requires matching TrueForge approval provenance.
+- Browser artifact capabilities cannot call MCP tools or control-plane APIs.
+- TrueForge and the MCP services have no host-published ports.
+- Database ports are loopback-only and exist for local connector verification.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+## Qodo Code Review Evidence
 
-```sh
-turbo build --filter=docs
-```
+Every substantive implementation layer is submitted through a Qodo-reviewed pull request. The review thread, findings, remediation commits, and follow-up review remain attached to each PR.
 
-Without global `turbo`:
+- Backend foundation: [PR #2](https://github.com/pawxnsingh/forty-two/pull/2) through [PR #11](https://github.com/pawxnsingh/forty-two/pull/11)
+- Interface and connectors: [PR #12](https://github.com/pawxnsingh/forty-two/pull/12)
+- Conversational analytics and visualization: [PR #13](https://github.com/pawxnsingh/forty-two/pull/13)
+- Production and submission readiness: [PR #14](https://github.com/pawxnsingh/forty-two/pull/14)
 
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
+Qodo review is requested with `/agentic_review` on every PR and rerun after remediation so the latest commit retains visible review evidence.
 
-### Develop
+## Demo
 
-To develop all apps and packages, run the following command:
+Recommended judge flow:
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+1. Open Connectors and add the provided PostgreSQL or CSV demo datasource.
+2. Use **Start conversation** from the connector menu.
+3. Ask for a grouped summary and an interactive chart.
+4. Expand execution activity, inspect the plan, switch between chart and table, and open fullscreen.
+5. Ask a follow-up to demonstrate durable datasource context.
+6. Reload the page to demonstrate session, plan, and artifact restoration.
+7. Demonstrate a controlled SQL change and deny or approve it from the scoped approval card.
 
-```sh
-cd my-turborepo
-turbo dev
-```
+The final public demo-video link must be added here before the submission form is sent.
 
-Without global `turbo`, use your package manager:
+## AI-assisted development disclosure
 
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+This hackathon project was developed with AI coding agents for planning, implementation, testing, review remediation, and documentation. Qodo supplied continuous pull-request review. Product runtime analysis is performed by the TrueForge-managed Forty Two agent using the authenticated MCP and Daytona environment described above.

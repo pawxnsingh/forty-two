@@ -296,16 +296,10 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    command:
-      [
-        "sh",
-        "-c",
-        "pnpm install --prefer-offline --frozen-lockfile && exec pnpm --filter web exec next dev --hostname 0.0.0.0 --port 3000",
-      ]
     dns:
       - ${FORTY_TWO_DNS_SERVER:-1.1.1.1}
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-forty_two}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-forty_two}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_READER_PASSWORD: ${POSTGRES_READER_PASSWORD:?Set POSTGRES_READER_PASSWORD in .env}
@@ -332,14 +326,8 @@ services:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
       TODO_MCP_AUTH_TOKEN: ${TODO_MCP_AUTH_TOKEN:?Set TODO_MCP_AUTH_TOKEN in .env}
       DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY: ${DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY:?Set DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY in .env}
-      WATCHPACK_POLLING: "true"
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
-    volumes:
-      - .:/workspace
-      - web_node_modules:/workspace/node_modules
-      - web_pnpm_store:/pnpm/store
-      - web_next_cache:/workspace/apps/web/.next
     depends_on:
       mysql-demo-init:
         condition: service_completed_successfully
@@ -368,6 +356,3 @@ volumes:
   mysql_data:
   sqlserver_data:
   redis_data:
-  web_node_modules:
-  web_pnpm_store:
-  web_next_cache:
