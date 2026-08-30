@@ -16,6 +16,7 @@ import {
   deleteApplicationSession,
   deleteSessionResources,
   readTurnInput,
+  recordApprovalThenContinue,
   runApprovalContinuationOnce,
   settledExistingApplicationSession,
   sqlApplyApprovalArguments,
@@ -229,6 +230,37 @@ test("concurrent approval continuations share one side effect and reject decisio
   release();
   assert.equal(await first, await retry);
   assert.equal(calls, 1);
+});
+
+test("records an approval decision durably before continuing the runtime", async () => {
+  const order: string[] = [];
+  assert.equal(
+    await recordApprovalThenContinue(
+      async () => {
+        order.push("record");
+      },
+      async () => {
+        order.push("continue");
+        return "resumed";
+      },
+    ),
+    "resumed",
+  );
+  assert.deepEqual(order, ["record", "continue"]);
+
+  await assert.rejects(
+    recordApprovalThenContinue(
+      async () => {
+        throw new Error("database unavailable");
+      },
+      async () => {
+        order.push("must-not-continue");
+        return "unreachable";
+      },
+    ),
+    /database unavailable/,
+  );
+  assert.deepEqual(order, ["record", "continue"]);
 });
 
 test("turns accept JSON messages only", async () => {

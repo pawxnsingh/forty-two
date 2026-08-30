@@ -166,6 +166,36 @@ test("ignores datasource calls and supports canonical history normalization", ()
   );
 });
 
+test("preserves causal input order when persisted plan timestamps tie", () => {
+  const tiedCall = {
+    ...planCall,
+    id: "z-call",
+    createdAt: "2026-08-28T00:00:00.000Z",
+  };
+  const tiedResponse: TrueForgeApi.ToolResponseEvent = {
+    type: "tool.response",
+    id: "a-response",
+    threadId: "main",
+    toolCallId: "call-plan",
+    createdAt: tiedCall.createdAt,
+    content: JSON.stringify({
+      plan: {
+        title: "Review",
+        items: [{ text: "Inspect", status: "pending" }],
+      },
+      revision: 7,
+      updatedAt: tiedCall.createdAt,
+    }),
+  };
+  assert.deepEqual(
+    normalizePlanHistory([
+      { turnId: "turn-1", event: tiedCall },
+      { turnId: "turn-1", event: tiedResponse },
+    ]).map(({ type }) => type),
+    ["plan.optimistic", "plan.reconciled"],
+  );
+});
+
 test("assembles streaming tool-call deltas before normalizing", () => {
   const state = createPlanEventState();
   const base = { ...planCall, toolCalls: undefined };

@@ -149,12 +149,13 @@ export function normalizePlanHistory(
 ): PlanEvent[] {
   const state = createPlanEventState();
   return [...items]
-    .sort((left, right) =>
-      left.event.createdAt === right.event.createdAt
-        ? left.event.id.localeCompare(right.event.id)
-        : left.event.createdAt.localeCompare(right.event.createdAt),
+    .map((item, inputIndex) => ({ item, inputIndex }))
+    .sort(
+      (left, right) =>
+        left.item.event.createdAt.localeCompare(right.item.event.createdAt) ||
+        left.inputIndex - right.inputIndex,
     )
-    .flatMap(({ event }) => normalizePlanEvent(event, state));
+    .flatMap(({ item }) => normalizePlanEvent(item.event, state));
 }
 
 function parsePlanArguments(parsed: unknown): PlanToolArguments | undefined {

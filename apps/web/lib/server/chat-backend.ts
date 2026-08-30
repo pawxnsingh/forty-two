@@ -693,48 +693,44 @@ export async function resolveSqlChangeApproval(
   return runApprovalContinuationOnce(
     `${runtimeSessionId}:${trueforgeTurnId}:${toolCallId}`,
     `${decision}:${reason?.trim() ?? ""}`,
-    async () => {
-      if (decision === "allow") {
-        await recordSqlChangeApproval({
-          changeSetId: argumentsValue.changeSetId as string,
-          chatSessionId: session.id,
-          trueforgeTurnId,
-          trueforgeToolCallId: toolCallId,
-          decision,
-        });
-      }
-      const resumed = await trueForgeClient().sessions.createTurn(
-        runtimeSessionId,
-        {
-          previousTurnId: trueforgeTurnId,
-          input: [
-            {
-              type: "user.tool_approval",
-              threadId: approvalEvent.threadId,
-              toolCallId,
-              approval:
-                decision === "allow"
-                  ? { status: "allow" }
-                  : {
-                      status: "deny",
-                      ...(reason ? { reason: reason.trim() } : {}),
-                    },
-            },
-          ],
-        },
-      );
-      if (decision === "deny") {
-        await recordSqlChangeApproval({
-          changeSetId: argumentsValue.changeSetId as string,
-          chatSessionId: session.id,
-          trueforgeTurnId,
-          trueforgeToolCallId: toolCallId,
-          decision,
-        });
-      }
-      return resumed;
-    },
+    () =>
+      recordApprovalThenContinue(
+        () =>
+          recordSqlChangeApproval({
+            changeSetId: argumentsValue.changeSetId as string,
+            chatSessionId: session.id,
+            trueforgeTurnId,
+            trueforgeToolCallId: toolCallId,
+            decision,
+          }).then(() => undefined),
+        () =>
+          trueForgeClient().sessions.createTurn(runtimeSessionId, {
+            previousTurnId: trueforgeTurnId,
+            input: [
+              {
+                type: "user.tool_approval",
+                threadId: approvalEvent.threadId,
+                toolCallId,
+                approval:
+                  decision === "allow"
+                    ? { status: "allow" }
+                    : {
+                        status: "deny",
+                        ...(reason ? { reason: reason.trim() } : {}),
+                      },
+              },
+            ],
+          }),
+      ),
   );
+}
+
+export async function recordApprovalThenContinue<T>(
+  record: () => Promise<void>,
+  continueTurn: () => Promise<T>,
+): Promise<T> {
+  await record();
+  return continueTurn();
 }
 
 export function runApprovalContinuationOnce(

@@ -780,6 +780,30 @@ test("history normalization sorts persisted events and never emits tool payloads
   assert.doesNotMatch(JSON.stringify(history), /rows|secret/);
 });
 
+test("preserves causal input order when persisted tool timestamps tie", () => {
+  const tiedAt = "2026-08-29T00:00:00.000Z";
+  const call = modelMessage({
+    id: "z-call",
+    createdAt: tiedAt,
+    toolCalls: [directToolCall({ id: "call-tied" })],
+  });
+  const response: TrueForgeApi.ToolResponseEvent = {
+    type: "tool.response",
+    id: "a-response",
+    threadId: "main",
+    createdAt: tiedAt,
+    toolCallId: "call-tied",
+    content: JSON.stringify({ ok: true }),
+  };
+  assert.deepEqual(
+    normalizeTurnHistory([
+      { turnId: "turn-1", event: call },
+      { turnId: "turn-1", event: response },
+    ]).map(({ type }) => type),
+    ["assistant.message.started", "tool.started", "tool.completed"],
+  );
+});
+
 test("public history payload contains normalized events only", () => {
   const rawResponse: TrueForgeApi.ToolResponseEvent = {
     type: "tool.response",
