@@ -72,11 +72,85 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_READER_PASSWORD: ${MYSQL_READER_PASSWORD:?Set MYSQL_READER_PASSWORD in .env}
+      MYSQL_WRITER_PASSWORD: ${MYSQL_WRITER_PASSWORD:?Set MYSQL_WRITER_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  mysql-demo-init:
+    image: mysql:8.4
+    command: ["sh", "/opt/forty-two/init-mysql-demo.sh"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_READER_PASSWORD: ${MYSQL_READER_PASSWORD:?Set MYSQL_READER_PASSWORD in .env}
+      MYSQL_WRITER_PASSWORD: ${MYSQL_WRITER_PASSWORD:?Set MYSQL_WRITER_PASSWORD in .env}
+    volumes:
+      - ./scripts/init-mysql-demo.sh:/opt/forty-two/init-mysql-demo.sh:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${SQLSERVER_SA_PASSWORD:?Set SQLSERVER_SA_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${SQLSERVER_PORT:-1433}:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          '/opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1 -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" >/dev/null',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  sqlserver-demo-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    command: ["bash", "/opt/forty-two/init-sqlserver-demo.sh"]
+    environment:
+      MSSQL_SA_PASSWORD: ${SQLSERVER_SA_PASSWORD:?Set SQLSERVER_SA_PASSWORD in .env}
+      SQLSERVER_READER_PASSWORD: ${SQLSERVER_READER_PASSWORD:?Set SQLSERVER_READER_PASSWORD in .env}
+      SQLSERVER_WRITER_PASSWORD: ${SQLSERVER_WRITER_PASSWORD:?Set SQLSERVER_WRITER_PASSWORD in .env}
+    volumes:
+      - ./scripts/init-sqlserver-demo.sh:/opt/forty-two/init-sqlserver-demo.sh:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: "no"
+
   data-source-mcp:
     image: forty-two-data-source-mcp:local
     build:
       context: .
       dockerfile: apps/data-source-mcp/Dockerfile
+    dns:
+      - ${FORTY_TWO_DNS_SERVER:-1.1.1.1}
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -86,8 +160,11 @@ services:
       SHUTDOWN_TIMEOUT_MS: ${DATA_SOURCE_MCP_SHUTDOWN_TIMEOUT_MS:-15000}
       MCP_CONTROL_DATABASE_URL: postgresql://forty_two_mcp:${POSTGRES_MCP_PASSWORD:?Set POSTGRES_MCP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-forty_two}
       DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY: ${DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY:?Set DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY in .env}
-    ports:
-      - "127.0.0.1:${DATA_SOURCE_MCP_PORT:-8791}:8791"
+      SQL_CHANGE_MAX_ROWS: ${SQL_CHANGE_MAX_ROWS:-100}
+      SQL_CHANGE_MAX_BIGQUERY_BYTES_BILLED: ${SQL_CHANGE_MAX_BIGQUERY_BYTES_BILLED:-1000000000}
+      AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME:?Set AZURE_STORAGE_ACCOUNT_NAME in .env}
+      AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY:?Set AZURE_STORAGE_ACCOUNT_KEY in .env}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:?Set AZURE_STORAGE_CONTAINER in .env}
     depends_on:
       postgres-readonly-init:
         condition: service_completed_successfully
@@ -106,18 +183,56 @@ services:
     stop_grace_period: 25s
     restart: unless-stopped
 
+  todo-mcp:
+    image: forty-two-todo-mcp:local
+    build:
+      context: .
+      dockerfile: apps/todo-mcp/Dockerfile
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8792
+      DATABASE_URL: postgresql://${POSTGRES_USER:-forty_two}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-forty_two}
+      TODO_MCP_AUTH_TOKEN: ${TODO_MCP_AUTH_TOKEN:?Set TODO_MCP_AUTH_TOKEN in .env}
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8792/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+  sandbox-image:
+    image: ${FORTY_TWO_SANDBOX_LOCAL_IMAGE:-forty-two-sandbox:local}
+    profiles: ["sandbox-image"]
+    build:
+      context: .
+      dockerfile: docker/sandbox/Dockerfile
+
   trueforge:
     image: forty-two-trueforge:local
     build:
       context: .
       dockerfile: docker/trueforge/Dockerfile
       args:
-        PLATFORM_SANDBOX_IMAGE_URI: ${PLATFORM_SANDBOX_IMAGE_URI:?Set PLATFORM_SANDBOX_IMAGE_URI to an immutable registry digest}
+        PLATFORM_SANDBOX_IMAGE_URI: ${PLATFORM_SANDBOX_IMAGE_URI:?Set PLATFORM_SANDBOX_IMAGE_URI to the published immutable sandbox image digest}
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 8790
-      PUBLIC_BASE_URL: ${TRUEFORGE_PUBLIC_BASE_URL:-http://localhost:8790}
+      PUBLIC_BASE_URL: http://trueforge:8790
       STANDALONE: "false"
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -125,10 +240,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-forty_two}
       REDIS_URL: redis://redis:6379
-    ports:
-      - "127.0.0.1:${TRUEFORGE_PORT:-8790}:8790"
+    dns:
+      - ${FORTY_TWO_DNS_SERVER:-1.1.1.1}
     depends_on:
       data-source-mcp:
+        condition: service_healthy
+      todo-mcp:
         condition: service_healthy
       postgres:
         condition: service_healthy
@@ -155,9 +272,11 @@ services:
     environment:
       TRUEFORGE_INTERNAL_URL: http://trueforge:8790
       DATA_SOURCE_MCP_INTERNAL_URL: http://data-source-mcp:8791
+      TODO_MCP_INTERNAL_URL: http://todo-mcp:8792
       DAYTONA_API_KEY: ${DAYTONA_API_KEY:?Set DAYTONA_API_KEY in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      TODO_MCP_AUTH_TOKEN: ${TODO_MCP_AUTH_TOKEN:?Set TODO_MCP_AUTH_TOKEN in .env}
       FORTY_TWO_AGENT_NAME: ${FORTY_TWO_AGENT_NAME:-forty-two-data-agent}
       FORTY_TWO_AGENT_SPEC_PATH: /opt/forty-two/agents/forty-two-data-agent.json
     volumes:
@@ -165,6 +284,8 @@ services:
       - ./config/agents:/opt/forty-two/agents:ro
     depends_on:
       data-source-mcp:
+        condition: service_healthy
+      todo-mcp:
         condition: service_healthy
       trueforge:
         condition: service_healthy
@@ -181,14 +302,36 @@ services:
         "-c",
         "pnpm install --prefer-offline --frozen-lockfile && exec pnpm --filter web exec next dev --hostname 0.0.0.0 --port 3000",
       ]
+    dns:
+      - ${FORTY_TWO_DNS_SERVER:-1.1.1.1}
     environment:
       NODE_ENV: development
       DATABASE_URL: postgresql://${POSTGRES_USER:-forty_two}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-forty_two}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_READER_PASSWORD: ${POSTGRES_READER_PASSWORD:?Set POSTGRES_READER_PASSWORD in .env}
+      POSTGRES_WRITER_PASSWORD: ${POSTGRES_WRITER_PASSWORD:?Set POSTGRES_WRITER_PASSWORD in .env}
+      POSTGRES_MUTATION_PASSWORD: ${POSTGRES_MUTATION_PASSWORD:?Set POSTGRES_MUTATION_PASSWORD in .env}
+      MYSQL_READER_PASSWORD: ${MYSQL_READER_PASSWORD:?Set MYSQL_READER_PASSWORD in .env}
+      MYSQL_WRITER_PASSWORD: ${MYSQL_WRITER_PASSWORD:?Set MYSQL_WRITER_PASSWORD in .env}
+      SQLSERVER_READER_PASSWORD: ${SQLSERVER_READER_PASSWORD:?Set SQLSERVER_READER_PASSWORD in .env}
+      SQLSERVER_WRITER_PASSWORD: ${SQLSERVER_WRITER_PASSWORD:?Set SQLSERVER_WRITER_PASSWORD in .env}
       TRUEFORGE_INTERNAL_URL: http://trueforge:8790
-      NEXT_PUBLIC_TRUEFORGE_URL: ${TRUEFORGE_PUBLIC_BASE_URL:-http://localhost:8790}
       FORTY_TWO_AGENT_NAME: ${FORTY_TWO_AGENT_NAME:-forty-two-data-agent}
+      MCP_CAPABILITY_SIGNING_KEY: ${MCP_CAPABILITY_SIGNING_KEY:?Set MCP_CAPABILITY_SIGNING_KEY in .env}
+      MCP_CAPABILITY_TTL_SECONDS: ${MCP_CAPABILITY_TTL_SECONDS:-3600}
+      CHAT_SESSION_MAX_DATA_SOURCES: ${CHAT_SESSION_MAX_DATA_SOURCES:-8}
       DAYTONA_API_URL: ${DAYTONA_API_URL:-https://app.daytona.io/api}
       DAYTONA_API_KEY: ${DAYTONA_API_KEY:?Set DAYTONA_API_KEY in .env}
+      AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME:?Set AZURE_STORAGE_ACCOUNT_NAME in .env}
+      AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY:?Set AZURE_STORAGE_ACCOUNT_KEY in .env}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:?Set AZURE_STORAGE_CONTAINER in .env}
+      AZURE_STORAGE_ALLOWED_ORIGINS: ${AZURE_STORAGE_ALLOWED_ORIGINS:-http://localhost:3000}
+      DATA_SOURCE_MAX_FILE_SIZE_BYTES: ${DATA_SOURCE_MAX_FILE_SIZE_BYTES:-26214400}
+      AZURE_STORAGE_UPLOAD_SAS_TTL_SECONDS: ${AZURE_STORAGE_UPLOAD_SAS_TTL_SECONDS:-300}
+      DATA_SOURCE_MCP_INTERNAL_URL: http://data-source-mcp:8791
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      TODO_MCP_AUTH_TOKEN: ${TODO_MCP_AUTH_TOKEN:?Set TODO_MCP_AUTH_TOKEN in .env}
+      DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY: ${DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY:?Set DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY in .env}
       WATCHPACK_POLLING: "true"
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
@@ -218,6 +361,8 @@ services:
 
 volumes:
   postgres_data:
+  mysql_data:
+  sqlserver_data:
   redis_data:
   web_node_modules:
   web_pnpm_store:

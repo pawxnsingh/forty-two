@@ -12,11 +12,17 @@
     "test": "pnpm test:chat-backend",
     "test:chat-backend": "node --import tsx --test lib/server/chat-backend.unit.test.ts",
     "sweep:file-datasource-blobs": "node --env-file-if-exists=../../.env --import tsx scripts/sweep-file-data-source-blobs.ts",
-    "test:data-sources": "node --import tsx --test lib/server/data-sources/*.unit.test.ts"
+    "test:data-sources": "node --import tsx --test lib/server/data-sources/*.unit.test.ts",
+    "test:chat-backend": "node --import tsx --test lib/server/chat-backend.unit.test.ts",
+    "test:turn-events": "node --import tsx --test lib/server/turn-events.unit.test.ts",
+    "test:plan-backend": "node --import tsx --test lib/server/plan-events.unit.test.ts",
+    "test:artifacts": "node --import tsx --test lib/server/artifacts/*.unit.test.ts"
   },
   "dependencies": {
     "@azure/storage-blob": "^12.28.0",
+    "@forty-two/artifacts": "workspace:*",
     "@forty-two/db": "workspace:*",
+    "@repo/charting": "workspace:*",
     "@repo/ui": "workspace:*",
     "@truefoundry/trueforge-sdk": "0.1.3",
     "exceljs": "^4.4.0",

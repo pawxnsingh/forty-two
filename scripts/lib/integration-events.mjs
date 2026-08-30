@@ -81,6 +81,12 @@ export async function listAllEventPages(fetchPage, maxPages = 100) {
   throw new Error(`TrueForge event pagination exceeded ${maxPages} pages.`);
 }
 
+export async function collectAllPageItems(page) {
+  const items = [];
+  for await (const item of page) items.push(item);
+  return items;
+}
+
 export async function discoverSandboxEvents({
   initialEvents,
   fetchEvents,

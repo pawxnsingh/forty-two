@@ -101,14 +101,54 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  apps/todo-mcp:
+    dependencies:
+      '@forty-two/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.30.0
+        version: 1.30.0(zod@4.4.3)
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/node':
+        specifier: ^24.13.3
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.1
+        version: 9.39.1
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
+
   apps/web:
     dependencies:
       '@azure/storage-blob':
         specifier: ^12.28.0
         version: 12.33.0
+      '@forty-two/artifacts':
+        specifier: workspace:*
+        version: link:../../packages/artifacts
       '@forty-two/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@repo/charting':
+        specifier: workspace:*
+        version: link:../../packages/charting
       '@repo/ui':
         specifier: workspace:*
         version: link:../../packages/ui

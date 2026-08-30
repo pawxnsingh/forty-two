@@ -2,9 +2,11 @@ import { readFile } from "node:fs/promises";
 
 const trueforgeUrl = requiredUrl("TRUEFORGE_INTERNAL_URL");
 const dataSourceMcpUrl = requiredUrl("DATA_SOURCE_MCP_INTERNAL_URL");
+const todoMcpUrl = requiredUrl("TODO_MCP_INTERNAL_URL");
 const daytonaApiKey = requiredSecret("DAYTONA_API_KEY");
 const openaiApiKey = requiredSecret("OPENAI_API_KEY");
-const mcpAuthToken = requiredSecret("MCP_AUTH_TOKEN");
+const todoMcpAuthToken = requiredSecret("TODO_MCP_AUTH_TOKEN");
+const dataSourceMcpAuthToken = requiredSecret("MCP_AUTH_TOKEN");
 const agentName = requiredSecret("FORTY_TWO_AGENT_NAME");
 const agentSpecPath = requiredSecret("FORTY_TWO_AGENT_SPEC_PATH");
 
@@ -32,22 +34,26 @@ console.log(
   `TrueForge OpenAI provider configured (${openaiCatalog.models.length} models).`,
 );
 
-const sandboxProvider = await requestJson(
+const currentSandboxProvider = await requestJson(
   `${trueforgeUrl}/api/v1/settings/sandbox-providers`,
-  {
-    method: "PUT",
-    body: {
-      manifest: {
-        type: "daytona",
-        auth: { api_key: daytonaApiKey },
-        exec_timeout_ms: 60_000,
-        auto_stop_interval_in_minutes: 5,
-        auto_archive_interval_in_minutes: 60,
-        auto_delete_interval_in_minutes: 7_200,
-      },
-    },
-  },
-);
+).catch(() => undefined);
+const currentSandboxStatus = currentSandboxProvider?.data?.status;
+const sandboxProvider =
+  currentSandboxStatus === "ready" || currentSandboxStatus === "pending"
+    ? currentSandboxProvider
+    : await requestJson(`${trueforgeUrl}/api/v1/settings/sandbox-providers`, {
+        method: "PUT",
+        body: {
+          manifest: {
+            type: "daytona",
+            auth: { api_key: daytonaApiKey },
+            exec_timeout_ms: 60_000,
+            auto_stop_interval_in_minutes: 5,
+            auto_archive_interval_in_minutes: 60,
+            auto_delete_interval_in_minutes: 7_200,
+          },
+        },
+      });
 
 const sandboxStatus = sandboxProvider.data?.status;
 if (sandboxStatus !== "ready" && sandboxStatus !== "pending") {
@@ -65,29 +71,92 @@ await requestJson(`${trueforgeUrl}/api/v1/settings/mcp-servers`, {
       type: "remote",
       name: mcpName,
       url: `${dataSourceMcpUrl}/mcp`,
-      description: "Read-only access to configured Forty Two data sources",
+      description:
+        "Shared internal Forty Two datasource control plane; every tool authorizes an explicit application session",
       auth: {
         type: "header",
-        headers: { Authorization: `Bearer ${mcpAuthToken}` },
+        headers: {
+          Authorization: `Bearer ${dataSourceMcpAuthToken}`,
+        },
       },
     },
   },
 });
-
-const toolsResponse = await requestJson(
+const dataSourceToolsResponse = await requestJson(
   `${trueforgeUrl}/api/v1/mcp-servers/${encodeURIComponent(mcpName)}/tools`,
 );
-const tools = toolsResponse.data;
-if (!Array.isArray(tools) || tools.length === 0) {
-  throw new Error("TrueForge did not discover any datasource MCP tools.");
+const dataSourceTools = dataSourceToolsResponse.data;
+const expectedDataSourceTools = [
+  "apply_sql_change",
+  "begin_table_artifact_upload",
+  "create_query_table_artifact",
+  "describe_table",
+  "finalize_chart_artifact",
+  "finalize_table_artifact",
+  "get_file_download_url",
+  "get_table_artifact_download_url",
+  "list_data_sources",
+  "list_databases",
+  "list_schemas",
+  "list_tables",
+  "prepare_sql_change",
+  "run_read_query",
+  "test_data_source",
+];
+const discoveredDataSourceTools = Array.isArray(dataSourceTools)
+  ? dataSourceTools.map((tool) => tool?.name).filter(Boolean).sort()
+  : [];
+if (
+  JSON.stringify(discoveredDataSourceTools) !==
+  JSON.stringify(expectedDataSourceTools)
+) {
+  throw new Error(
+    `TrueForge datasource MCP inventory is invalid: ${discoveredDataSourceTools.join(", ")}`,
+  );
 }
 console.log(
-  `TrueForge datasource MCP configured (${tools.length} tools discovered).`,
+  `TrueForge shared datasource MCP configured (${dataSourceTools.length} tools discovered).`,
 );
+
+const todoMcpName = "forty-two-todo";
+await requestJson(`${trueforgeUrl}/api/v1/settings/mcp-servers`, {
+  method: "PUT",
+  body: {
+    manifest: {
+      type: "remote",
+      name: todoMcpName,
+      url: `${todoMcpUrl}/mcp`,
+      description: "Shared session plan persistence for Forty Two",
+      auth: {
+        type: "header",
+        headers: { Authorization: `Bearer ${todoMcpAuthToken}` },
+      },
+    },
+  },
+});
+const todoToolsResponse = await requestJson(
+  `${trueforgeUrl}/api/v1/mcp-servers/${encodeURIComponent(todoMcpName)}/tools`,
+);
+const todoTools = todoToolsResponse.data;
+if (
+  !Array.isArray(todoTools) ||
+  todoTools.length !== 1 ||
+  todoTools[0]?.name !== "plan"
+) {
+  throw new Error("TrueForge did not discover exactly the Todo MCP plan tool.");
+}
+console.log("TrueForge Todo MCP configured (plan tool discovered).");
 
 await waitForSandboxReady();
 
 const agentManifest = JSON.parse(await readFile(agentSpecPath, "utf8"));
+if (
+  typeof agentManifest.instructions !== "string" ||
+  !agentManifest.instructions.includes("<artifact_workflow>") ||
+  !agentManifest.instructions.includes("</artifact_workflow>")
+) {
+  throw new Error("Artifact workflow instructions are malformed.");
+}
 const agentsResponse = await requestJson(`${trueforgeUrl}/api/v1/agents`);
 const existingAgent = agentsResponse.data?.find(
   (agent) => agent.name === agentName,

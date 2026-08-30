@@ -1,8 +1,10 @@
 import {
   apiError,
   listAllEvents,
+  trueforgeSessionId,
   validId,
 } from "../../../../../../../../lib/server/chat-backend";
+import { normalizedTurnHistoryPayload } from "../../../../../../../../lib/server/turn-events";
 
 export const runtime = "nodejs";
 
@@ -18,10 +20,12 @@ export async function GET(
     const { sessionId, turnId } = await context.params;
     const safeSessionId = validId(sessionId, "session id");
     const safeTurnId = validId(turnId, "turn id");
-    const events = await listAllEvents(safeSessionId, safeTurnId);
-    return Response.json({
-      data: events.filter((item) => item.turnId === safeTurnId),
-    });
+    const events = await listAllEvents(
+      await trueforgeSessionId(safeSessionId),
+      safeTurnId,
+    );
+    const turnEvents = events.filter((item) => item.turnId === safeTurnId);
+    return Response.json(normalizedTurnHistoryPayload(turnEvents));
   } catch (error) {
     return apiError(error);
   }

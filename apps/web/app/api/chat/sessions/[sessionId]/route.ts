@@ -1,6 +1,7 @@
 import {
   apiError,
-  deleteSessionResources,
+  applicationSession,
+  deleteApplicationSession,
   trueForgeClient,
   validId,
 } from "../../../../../lib/server/chat-backend";
@@ -15,10 +16,20 @@ export async function GET(
 ): Promise<Response> {
   try {
     const { sessionId } = await context.params;
-    const session = await trueForgeClient().sessions.get(
+    const application = await applicationSession(
       validId(sessionId, "session id"),
     );
-    return Response.json(session);
+    const runtimeSession = await trueForgeClient().sessions.get(
+      application.trueforgeSessionId!,
+    );
+    const runtimeData: Record<string, unknown> = { ...runtimeSession.data };
+    Reflect.deleteProperty(runtimeData, "id");
+    return Response.json({
+      data: {
+        ...runtimeData,
+        id: validId(sessionId, "session id"),
+      },
+    });
   } catch (error) {
     return apiError(error);
   }
@@ -30,7 +41,7 @@ export async function DELETE(
 ): Promise<Response> {
   try {
     const { sessionId } = await context.params;
-    await deleteSessionResources(validId(sessionId, "session id"));
+    await deleteApplicationSession(validId(sessionId, "session id"));
     return new Response(null, { status: 204 });
   } catch (error) {
     return apiError(error);

@@ -1,42 +1,122 @@
-import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 
-import {
-  assertNoDirectDatasourceCalls,
-  correlatedCodeModeResults,
-  discoverSandboxEvents,
-  listAllEventPages,
-} from "./lib/integration-events.mjs";
+const requireFromMcp = createRequire(
+  new URL("../apps/data-source-mcp/package.json", import.meta.url),
+);
+const { Client } = requireFromMcp("@modelcontextprotocol/sdk/client/index.js");
+const { StreamableHTTPClientTransport } = requireFromMcp(
+  "@modelcontextprotocol/sdk/client/streamableHttp.js",
+);
 
 const trueforgeUrl = normalizeUrl(
   process.env.TRUEFORGE_URL ?? "http://127.0.0.1:8790",
 );
-const daytonaUrl = normalizeUrl(
-  process.env.DAYTONA_API_URL ?? "https://app.daytona.io/api",
-);
-const daytonaApiKey = requiredSecret("DAYTONA_API_KEY");
 const dataSourceMcpUrl = normalizeUrl(
   process.env.DATA_SOURCE_MCP_URL ?? "http://127.0.0.1:8791",
 );
-const mcpAuthToken = requiredSecret("MCP_AUTH_TOKEN");
-const queryRequestId = randomUUID();
+const mcpAuthToken = requiredEnvironment("MCP_AUTH_TOKEN");
 const agentName =
   process.env.FORTY_TWO_AGENT_NAME?.trim() || "forty-two-data-agent";
 
 let sessionId;
-let turnId;
-let events = [];
-let testPassed = false;
+let primaryError;
 
 try {
-  const session = await requestTrueforge(`${trueforgeUrl}/api/v1/sessions`, {
+  await assertSharedTransportFailsClosedWithoutActiveSession();
+  await assertSharedConnectorReady();
+  await assertNamedAgentCannotCallDatasource();
+  console.log(
+    "Platform security integration passed: shared transport requires an active bound application session.",
+  );
+} catch (error) {
+  primaryError = error;
+} finally {
+  let cleanupError;
+  if (sessionId) {
+    const response = await requestTrueForge(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE", allowStatuses: [204, 404] },
+    ).catch((error) => {
+      cleanupError = error;
+    });
+    void response;
+  }
+  if (primaryError || cleanupError) {
+    throw new AggregateError(
+      [primaryError, cleanupError].filter(Boolean),
+      "Platform security integration failed or cleanup was incomplete.",
+    );
+  }
+}
+
+async function assertSharedTransportFailsClosedWithoutActiveSession() {
+  const client = new Client({ name: "platform-security", version: "1.0.0" });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`${dataSourceMcpUrl}/mcp`),
+    { requestInit: { headers: { authorization: `Bearer ${mcpAuthToken}` } } },
+  );
+  await client.connect(transport);
+  try {
+    const tools = await client.listTools();
+    assert.ok(
+      tools.tools.every((tool) =>
+        tool.inputSchema.required?.includes("sessionId"),
+      ),
+    );
+    for (const applicationSessionId of [
+      "sess_01HZX000000000000000000099",
+      "sess_01HZX000000000000000000098",
+    ]) {
+      const response = await client.callTool({
+        name: "list_data_sources",
+        arguments: { sessionId: applicationSessionId },
+      });
+      assert.equal(response.isError, true);
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+async function assertSharedConnectorReady() {
+  const response = await requestTrueForge(
+    "/api/v1/mcp-servers/forty-two-data-source/tools",
+    {},
+  );
+  assert.equal(response.status, 200);
+  assert.ok(
+    response.body.data.some((tool) => tool.name === "finalize_chart_artifact"),
+  );
+  assert.equal(
+    response.body.data.some((tool) => tool.name === "visualize"),
+    false,
+  );
+}
+
+async function assertNamedAgentCannotCallDatasource() {
+  const agents = await requestTrueForge("/api/v1/agents");
+  const agent = agents.body.data.find(
+    (candidate) => candidate.name === agentName,
+  );
+  assert.ok(agent, `Configured agent ${agentName} was not found.`);
+  const servers =
+    agent.manifest?.mcpServers ?? agent.manifest?.mcp_servers ?? [];
+  assert.equal(
+    servers.some((server) => server.name === "forty-two-data-source"),
+    true,
+    "The callable named agent is missing the shared datasource connector.",
+  );
+
+  const created = await requestTrueForge("/api/v1/sessions", {
     method: "POST",
     body: { agent: { name: agentName } },
   });
-  sessionId = requiredId(session.data?.id, "session");
-  console.log(`Integration session created (${sessionId}).`);
+  sessionId = String(created.body.data?.id ?? "");
+  assert.ok(sessionId);
 
-  const createdTurn = await requestTrueforge(
-    `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`,
+  const createdTurn = await requestTrueForge(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`,
     {
       method: "POST",
       body: {
@@ -44,223 +124,74 @@ try {
         input: [
           {
             type: "user.message",
-            content: `Use Code Mode in the Daytona sandbox for this test; do not call the datasource tools directly from the model.
-
-In sandboxed Python, import call_tool from mcp_client and:
-1. Call server "forty-two-data-source", tool "list_data_sources", with an empty body.
-2. Confirm "local-postgres" is present.
-3. Call server "forty-two-data-source", tool "run_read_query", with body {"dataSource":"local-postgres","sql":"SELECT current_database() AS database_name, md5(random()::text) AS nonce","maxRows":1,"requestId":"${queryRequestId}"}.
-4. Print the returned object exactly once. Do not run another query or a second formatting script.
-
-Copy database_name and nonce from that same returned row and answer exactly in this shape, with no other text:
-PLATFORM_INTEGRATION_OK database=<database_name> nonce=<nonce>`,
+            content:
+              'Call list_data_sources and then run SQL "SELECT 1" against local-postgres. Report only actual tool results.',
           },
         ],
       },
     },
   );
-  turnId = requiredId(createdTurn.data?.id, "turn");
-
-  const deadline = Date.now() + 5 * 60_000;
-  let turn = createdTurn.data;
+  const turnId = String(createdTurn.body.data?.id ?? "");
+  assert.ok(turnId);
+  let turn = createdTurn.body.data;
+  const deadline = Date.now() + 90_000;
   while (turn.state?.status === "running" && Date.now() < deadline) {
-    await delay(1_000);
+    await delay(500);
     turn = (
-      await requestTrueforge(
-        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`,
+      await requestTrueForge(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`,
       )
-    ).data;
+    ).body.data;
   }
-  if (turn.state?.status === "running") {
-    throw new Error("Integration turn did not finish within five minutes.");
-  }
-  if (turn.state?.status !== "done") {
-    throw new Error(
-      `Integration turn failed (${String(turn.state?.status)}): ${String(turn.state?.message ?? "unknown error")}`,
-    );
-  }
-  if (turn.state.required_actions?.length) {
-    throw new Error("Integration turn unexpectedly paused for user action.");
-  }
+  assert.notEqual(turn.state?.status, "running");
 
-  events = await getTurnEvents();
-  const eventTypes = new Set(events.map((event) => event.type));
-  for (const requiredType of ["mcp.initialize", "sandbox.created"]) {
-    if (!eventTypes.has(requiredType)) {
-      throw new Error(`Integration turn did not emit ${requiredType}.`);
-    }
-  }
-
-  assertNoDirectDatasourceCalls(events);
-  const codeModeResults = correlatedCodeModeResults(events, queryRequestId);
-  if (codeModeResults.length === 0) {
-    throw new Error(
-      "No correlated Daytona exec/tool response used the runner-issued MCP request id.",
-    );
-  }
-  const execution = await requestMcpExecution(queryRequestId);
-  const verifiedRow = execution.rows?.[0];
-  if (
-    execution.dataSource !== "local-postgres" ||
-    verifiedRow?.database_name !== "forty_two" ||
-    typeof verifiedRow.nonce !== "string" ||
-    !/^[a-f0-9]{32}$/.test(verifiedRow.nonce)
-  ) {
-    throw new Error(
-      "Datasource MCP telemetry did not contain the expected row.",
-    );
-  }
-  if (
-    !codeModeResults.some(
-      (content) =>
-        content.includes(verifiedRow.database_name) &&
-        content.includes(verifiedRow.nonce),
-    )
-  ) {
-    throw new Error(
-      "The correlated Daytona exec result did not contain the server-recorded MCP database and nonce.",
-    );
-  }
-  const output = JSON.stringify(turn.state.output ?? {});
-  if (
-    !output.includes(verifiedRow.database_name) ||
-    !output.includes(verifiedRow.nonce)
-  ) {
-    throw new Error(
-      `The final answer did not match the server-recorded MCP nonce. Final output: ${output.slice(0, 1_000)}`,
-    );
-  }
-
-  console.log(
-    `Platform integration passed (turn=${turnId}, nonce=${verifiedRow.nonce}, events=${events.length}).`,
+  const eventResponse = await requestTrueForge(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events?limit=100&order=asc`,
   );
-  testPassed = true;
-} finally {
-  try {
-    await cleanup();
-  } catch (error) {
-    if (testPassed) throw error;
-    console.error(`Integration cleanup also failed: ${String(error)}`);
-  }
+  const events = eventResponse.body.data.map((item) => item.event ?? item);
+  const datasourceCalls = events.flatMap((event) =>
+    event.type === "model.message" && Array.isArray(event.toolCalls)
+      ? event.toolCalls.filter(
+          (call) =>
+            call.toolInfo?.serverName === "forty-two-data-source" ||
+            ["list_data_sources", "run_read_query"].includes(
+              call.toolInfo?.name,
+            ),
+        )
+      : [],
+  );
+  const successful = events.filter(
+    (event) =>
+      event.type === "tool.response" &&
+      datasourceCalls.some((call) => call.id === event.toolCallId) &&
+      !String(event.content).includes("failed"),
+  );
+  assert.deepEqual(successful, []);
 }
 
-async function requestMcpExecution(requestId) {
+async function requestTrueForge(
+  path,
+  { method = "GET", body, allowStatuses = [] } = {},
+) {
   const response = await fetch(
-    `${dataSourceMcpUrl}/internal/query-executions/${encodeURIComponent(requestId)}`,
+    path.startsWith("http") ? path : `${trueforgeUrl}${path}`,
     {
-      headers: { authorization: `Bearer ${mcpAuthToken}` },
+      method,
+      headers:
+        body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     },
   );
-  const body = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    throw new Error(`Datasource MCP telemetry failed (${response.status}).`);
+  const text = response.status === 204 ? "" : await response.text();
+  const responseBody = text ? JSON.parse(text) : undefined;
+  if (!response.ok && !allowStatuses.includes(response.status)) {
+    throw new Error(`TrueForge request failed (${response.status}).`);
   }
-  return body?.data ?? {};
+  return { status: response.status, body: responseBody };
 }
 
-async function getTurnEvents() {
-  if (!sessionId || !turnId) return [];
-  return listAllEventPages(async (pageToken) => {
-    const url = new URL(
-      `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`,
-    );
-    url.searchParams.set("limit", "100");
-    url.searchParams.set("order", "asc");
-    if (pageToken) url.searchParams.set("page_token", pageToken);
-    return requestTrueforge(url.toString());
-  });
-}
-
-async function cleanup() {
-  const errors = [];
-  if (sessionId) {
-    try {
-      await requestTrueforge(
-        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`,
-        { method: "POST", body: {} },
-      );
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-
-  let sandboxDispositionKnown = !turnId;
-  if (sessionId && turnId) {
-    try {
-      events = await discoverSandboxEvents({
-        initialEvents: events,
-        fetchEvents: getTurnEvents,
-        pause: delay,
-      });
-      sandboxDispositionKnown = true;
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-
-  const sandboxIds = new Set(
-    events
-      .filter((event) => event.type === "sandbox.created")
-      .map((event) => rawDaytonaId(event.sandbox_id))
-      .filter(Boolean),
-  );
-  for (const sandboxId of sandboxIds) {
-    try {
-      await deleteDaytonaSandbox(sandboxId);
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (sessionId && sandboxDispositionKnown) {
-    try {
-      await requestTrueforge(
-        `${trueforgeUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-        { method: "DELETE" },
-      );
-    } catch (error) {
-      errors.push(error);
-    }
-  } else if (sessionId && !errors.length) {
-    errors.push(
-      new Error(
-        `Retained TrueForge session ${sessionId} because sandbox discovery failed`,
-      ),
-    );
-  }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "Integration cleanup was incomplete");
-  }
-}
-
-function rawDaytonaId(value) {
-  if (typeof value !== "string") return undefined;
-  const prefix = "v1:daytona:";
-  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
-async function deleteDaytonaSandbox(sandboxId) {
-  const response = await fetch(
-    `${daytonaUrl}/sandbox/${encodeURIComponent(sandboxId)}`,
-    {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${daytonaApiKey}` },
-      signal: AbortSignal.timeout(60_000),
-    },
-  );
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Daytona sandbox deletion failed (${response.status}).`);
-  }
-}
-
-function requiredId(value, label) {
-  if (typeof value !== "string") {
-    throw new Error(`TrueForge did not return a ${label} id.`);
-  }
-  return value;
-}
-
-function requiredSecret(name) {
+function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
@@ -272,26 +203,6 @@ function normalizeUrl(value) {
     throw new Error("Integration URLs must use HTTP or HTTPS.");
   }
   return url.toString().replace(/\/$/, "");
-}
-
-async function requestTrueforge(url, { method = "GET", body } = {}) {
-  const response = await fetch(url, {
-    method,
-    headers:
-      body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const responseBody = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    const message = responseBody?.error?.message;
-    throw new Error(
-      typeof message === "string"
-        ? `TrueForge request failed (${response.status}): ${message}`
-        : `TrueForge request failed (${response.status}).`,
-    );
-  }
-  return responseBody;
 }
 
 function delay(milliseconds) {

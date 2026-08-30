@@ -4,6 +4,7 @@ import {
   parseWaitTimeout,
   validId,
   waitForTurn,
+  trueforgeSessionId,
 } from "../../../../../../../../lib/server/chat-backend";
 
 export const runtime = "nodejs";
@@ -26,12 +27,14 @@ export async function POST(
       throw new ApiInputError("Request body must be valid JSON.");
     }
     const turn = await waitForTurn(
-      validId(sessionId, "session id"),
+      await trueforgeSessionId(validId(sessionId, "session id")),
       validId(turnId, "turn id"),
       parseWaitTimeout(body),
       request.signal,
     );
-    return Response.json({ data: turn });
+    return Response.json({
+      data: { ...turn, sessionId: validId(sessionId, "session id") },
+    });
   } catch (error) {
     return apiError(error);
   }

@@ -1,6 +1,7 @@
 import {
   apiError,
   trueForgeClient,
+  trueforgeSessionId,
   validId,
 } from "../../../../../../lib/server/chat-backend";
 
@@ -15,7 +16,7 @@ export async function POST(
   try {
     const { sessionId } = await context.params;
     const result = await trueForgeClient().sessions.cancel(
-      validId(sessionId, "session id"),
+      await trueforgeSessionId(validId(sessionId, "session id")),
     );
     return Response.json(result);
   } catch (error) {
