@@ -98,6 +98,24 @@ describe("canonical table.v1", () => {
         /non-JSON object/,
       );
     }
+    assert.doesNotThrow(() =>
+      serializeCanonicalTableV1({
+        columns: [
+          { name: "\u{10000}".repeat(128), type: "string", nullable: true },
+        ],
+        rows: [],
+      }),
+    );
+    assert.throws(
+      () =>
+        serializeCanonicalTableV1({
+          columns: [
+            { name: "\u{10000}".repeat(256), type: "string", nullable: true },
+          ],
+          rows: [],
+        }),
+      /256 UTF-16/,
+    );
     assert.throws(
       () => parseCanonicalTableV1(Buffer.alloc(MAX_ARTIFACT_BYTES + 1)),
       /5 MiB/,

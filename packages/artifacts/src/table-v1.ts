@@ -11,7 +11,12 @@ export const MAX_CHART_ROWS = 5_000;
 
 export const TableColumnV1Schema = z
   .object({
-    name: z.string().min(1).max(256),
+    name: z
+      .string()
+      .min(1)
+      .refine((value) => value.length <= 256, {
+        message: "Column names must not exceed 256 UTF-16 code units.",
+      }),
     type: z.enum([
       "string",
       "number",

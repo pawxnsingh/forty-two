@@ -752,7 +752,7 @@ def _chart_number(
 
 
 def _chart_enum(value: Any, label: str, choices: set[Any]) -> Any:
-    if value not in choices:
+    if not any(type(value) is type(choice) and value == choice for choice in choices):
         raise ValueError(f"{label} is invalid")
     return value
 
@@ -906,7 +906,11 @@ def _canonical_column_label_formats(
                 canonical[key] = item[key]
         if "replaceMissingDataWith" in item:
             replacement = item["replaceMissingDataWith"]
-            if replacement != 0 and replacement is not None and not isinstance(replacement, str):
+            if not (
+                replacement is None
+                or isinstance(replacement, str)
+                or (type(replacement) is int and replacement == 0)
+            ):
                 raise ValueError(f"columnLabelFormats.{name}.replaceMissingDataWith is invalid")
             canonical["replaceMissingDataWith"] = replacement
         result[name] = canonical

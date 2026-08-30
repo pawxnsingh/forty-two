@@ -276,6 +276,22 @@ class HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not exist"):
             MODULE._column_list(["Sales"], "axis", 1, 1, {" Sales "})
 
+    def test_chart_enums_and_replacements_are_type_strict(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            MODULE._chart_enum(False, "rotation", {0, 45, 90, "auto"})
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            MODULE._chart_enum([], "rotation", {0, 45, 90, "auto"})
+        with self.assertRaisesRegex(ValueError, "replaceMissingDataWith"):
+            MODULE._canonical_column_label_formats(
+                {"Sales": {"replaceMissingDataWith": False}}, {"Sales"}
+            )
+        self.assertEqual(
+            MODULE._canonical_column_label_formats(
+                {"Sales": {"replaceMissingDataWith": 0}}, {"Sales"}
+            )["Sales"]["replaceMissingDataWith"],
+            0,
+        )
+
     def test_server_discovery_is_exact_and_does_not_accept_ambiguous_connectors(self) -> None:
         self.assertEqual(MODULE._mcp_server_name(), "forty-two-data-source")
         encoded = base64.b64encode(
