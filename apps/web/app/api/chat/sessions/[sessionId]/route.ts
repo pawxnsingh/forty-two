@@ -2,6 +2,7 @@ import {
   apiError,
   applicationSession,
   deleteApplicationSession,
+  refreshArtifactCapability,
   trueForgeClient,
   validId,
 } from "../../../../../lib/server/chat-backend";
@@ -30,6 +31,7 @@ export async function GET(
     const dataSources = await listChatSessionDataSources({
       chatSessionId: application.id,
     });
+    const artifactCapability = await refreshArtifactCapability(application);
     const runtimeData: Record<string, unknown> = { ...runtimeSession.data };
     Reflect.deleteProperty(runtimeData, "id");
     return Response.json({
@@ -37,6 +39,7 @@ export async function GET(
         ...runtimeData,
         id: validId(sessionId, "session id"),
         title: application.title,
+        artifactCapability,
         dataSources: dataSources.map((source) => ({
           id: source.id,
           name: source.name,

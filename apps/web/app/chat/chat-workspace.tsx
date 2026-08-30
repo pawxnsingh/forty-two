@@ -145,6 +145,23 @@ interface ArtifactEnvelope {
 }
 
 const terminalStates = new Set(["done", "error", "cancelled", "canceled"]);
+
+function artifactCapabilityKey(sessionId: string): string {
+  return `forty-two-artifact-capability:${sessionId}`;
+}
+
+function storedArtifactCapability(sessionId: string): string | null {
+  return sessionStorage.getItem(artifactCapabilityKey(sessionId));
+}
+
+function rememberArtifactCapability(
+  sessionId: string,
+  capability: string,
+): void {
+  const key = artifactCapabilityKey(sessionId);
+  sessionStorage.setItem(key, capability);
+}
+
 const streamCategories = [
   "assistant",
   "tool",
@@ -755,11 +772,7 @@ export function ChatWorkspace({
       capabilityRenewal.current = null;
     }
     setCapability(
-      initialSessionId
-        ? sessionStorage.getItem(
-            `forty-two-artifact-capability:${initialSessionId}`,
-          )
-        : null,
+      initialSessionId ? storedArtifactCapability(initialSessionId) : null,
     );
   }, [initialSessionId]);
 
@@ -786,8 +799,8 @@ export function ChatWorkspace({
             data: { artifactCapability: string };
           };
           if (activeSessionId.current !== sessionId) return null;
-          sessionStorage.setItem(
-            `forty-two-artifact-capability:${sessionId}`,
+          rememberArtifactCapability(
+            sessionId,
             payload.data.artifactCapability,
           );
           setCapability(payload.data.artifactCapability);
@@ -823,9 +836,17 @@ export function ChatWorkspace({
           return;
         }
         const payload = (await sessionResponse.json()) as {
-          data: { dataSources: DataSource[] };
+          data: {
+            artifactCapability: string;
+            dataSources: DataSource[];
+          };
         };
         if (signal.aborted) return;
+        rememberArtifactCapability(
+          initialSessionId,
+          payload.data.artifactCapability,
+        );
+        setCapability(payload.data.artifactCapability);
         setSources(payload.data.dataSources);
         setSelectedSourceIds(
           payload.data.dataSources.map((source) => source.id),
@@ -1113,10 +1134,8 @@ export function ChatWorkspace({
         sessionId = payload.data.id;
         createdSessionId = sessionId;
         sessionCreation.current = null;
-        sessionStorage.setItem(
-          `forty-two-artifact-capability:${sessionId}`,
-          payload.data.artifactCapability,
-        );
+        rememberArtifactCapability(sessionId, payload.data.artifactCapability);
+        setCapability(payload.data.artifactCapability);
         localStorage.setItem(
           `forty-two-session-title:${sessionId}`,
           text.length > 48 ? `${text.slice(0, 47)}…` : text,

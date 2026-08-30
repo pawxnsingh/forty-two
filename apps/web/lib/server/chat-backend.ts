@@ -165,6 +165,32 @@ export async function applicationSession(
   return session;
 }
 
+export async function refreshArtifactCapability(
+  session: ChatSession,
+): Promise<string> {
+  if (session.status !== "active" || !session.trueforgeSessionId) {
+    throw new Error("Application session is not active.");
+  }
+  const issuedAt = new Date();
+  const refreshed = await rotateChatSessionCapability({
+    chatSessionId: session.id,
+    capabilityId: session.capabilityId,
+    capabilityExpiresAt: new Date(
+      issuedAt.getTime() + capabilityTtlSeconds() * 1_000,
+    ),
+  });
+  if (!refreshed) {
+    throw new ApiInputError("Chat session was not found.", 404);
+  }
+  return mintArtifactBrowserCapability({
+    chatSessionId: refreshed.id,
+    capabilityId: refreshed.capabilityId,
+    expiresAt: refreshed.capabilityExpiresAt,
+    issuedAt,
+    signingKey: requiredEnvironment("MCP_CAPABILITY_SIGNING_KEY"),
+  });
+}
+
 export async function renewArtifactCapability(
   request: Request,
   applicationSessionId: string,
