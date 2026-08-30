@@ -345,7 +345,9 @@ function safeToolResult(
   tool: ToolState | undefined,
 ): { outcome: "success" | "error"; summary: string } {
   if (content.length > MAX_TOOL_ENVELOPE_CHARS) {
-    return { outcome: "success", summary: "Completed" };
+    return topLevelBooleanField(content, "isError")
+      ? { outcome: "error", summary: "Did not complete" }
+      : { outcome: "success", summary: "Completed" };
   }
 
   const envelope = parseJson(content);
@@ -371,7 +373,10 @@ function safeToolResult(
   if (name === "list_data_sources") {
     summary = countSummary(value, "dataSources", "data source");
   } else if (name === "test_data_source") {
-    summary = value.connected === true ? "Connection verified" : "Connection unavailable";
+    summary =
+      value.connected === true
+        ? "Connection verified"
+        : "Connection unavailable";
   } else if (name === "list_databases") {
     summary = countSummary(value, "databases", "database");
   } else if (name === "list_schemas") {
@@ -382,7 +387,10 @@ function safeToolResult(
     summary = countSummary(value, "columns", "column");
   } else if (name === "run_read_query") {
     const count = Array.isArray(value.rows) ? value.rows.length : null;
-    summary = count === null ? "Query completed" : pluralCount("Returned", count, "row");
+    summary =
+      count === null
+        ? "Query completed"
+        : pluralCount("Returned", count, "row");
     if (isRecord(value.metadata) && value.metadata.limited === true) {
       summary += " · row limit reached";
     }
@@ -406,6 +414,44 @@ function safeToolResult(
     outcome: "success",
     summary: safeText(summary, MAX_TOOL_SUMMARY_CHARS),
   };
+}
+
+function topLevelBooleanField(source: string, field: string): boolean {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let stringStart = -1;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character !== '"') continue;
+      inString = false;
+      if (depth !== 1 || source.slice(stringStart, index) !== field) continue;
+      let cursor = index + 1;
+      while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+      if (source[cursor] !== ":") continue;
+      cursor += 1;
+      while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+      return source.startsWith("true", cursor);
+    }
+    if (character === '"') {
+      inString = true;
+      stringStart = index + 1;
+    } else if (character === "{" || character === "[") {
+      depth += 1;
+    } else if (character === "}" || character === "]") {
+      depth -= 1;
+    }
+  }
+  return false;
 }
 
 function structuredToolResult(value: unknown): Record<string, unknown> {

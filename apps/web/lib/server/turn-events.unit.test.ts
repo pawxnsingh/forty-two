@@ -722,6 +722,26 @@ test("rejects oversized tool envelopes before parsing them", () => {
     response.map(({ type }) => type),
     ["tool.completed"],
   );
+  assert.equal(
+    response[0]?.type === "tool.completed" ? response[0].outcome : undefined,
+    "success",
+  );
+  const failed = normalizeTurnEvent(
+    {
+      type: "tool.response",
+      id: "oversized-error-response",
+      threadId: "main",
+      createdAt: "2026-08-29T00:00:02.000Z",
+      toolCallId: "call-oversized-plan",
+      content: `{"padding":"${"y".repeat(70_000)}","isError":true}`,
+    },
+    state,
+  );
+  assert.equal(failed[0]?.type, "tool.completed");
+  assert.equal(
+    failed[0]?.type === "tool.completed" ? failed[0].outcome : undefined,
+    "error",
+  );
   assert.ok(JSON.stringify([...started, ...response]).length < 2_000);
 });
 
