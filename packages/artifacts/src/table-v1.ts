@@ -74,6 +74,50 @@ export type CanonicalTableV1 = {
   rows: Record<string, unknown>[];
 };
 
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATETIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+function isCalendarDate(year: number, month: number, day: number): boolean {
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(0, 0, 0, 0);
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+export function isCanonicalDatetimeString(value: string): boolean {
+  const dateOnly = ISO_DATE_PATTERN.exec(value);
+  if (dateOnly) {
+    return isCalendarDate(
+      Number(dateOnly[1]),
+      Number(dateOnly[2]),
+      Number(dateOnly[3]),
+    );
+  }
+  const datetime = ISO_DATETIME_PATTERN.exec(value);
+  if (!datetime) return false;
+  if (
+    !isCalendarDate(
+      Number(datetime[1]),
+      Number(datetime[2]),
+      Number(datetime[3]),
+    ) ||
+    Number(datetime[4]) > 23 ||
+    Number(datetime[5]) > 59 ||
+    Number(datetime[6]) > 59
+  ) {
+    return false;
+  }
+  return (
+    datetime[7] === undefined ||
+    (Number(datetime[8]) <= 23 && Number(datetime[9]) <= 59)
+  );
+}
+
 function canonicalJsonValue(value: unknown, path: string): unknown {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") {
@@ -154,8 +198,8 @@ function assertCellMatchesColumn(
         throw new Error(`${path} must be boolean.`);
       return;
     case "datetime":
-      if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
-        throw new Error(`${path} must be an ISO-compatible datetime string.`);
+      if (typeof value !== "string" || !isCanonicalDatetimeString(value)) {
+        throw new Error(`${path} must be a canonical ISO datetime string.`);
       }
       return;
     case "json":
@@ -174,10 +218,7 @@ function normalizeRows(
   const expected = new Set(names);
   return rawRows.map((rawRow, rowIndex) => {
     const keys = Object.keys(rawRow);
-    if (
-      keys.length !== names.length ||
-      keys.some((key) => !expected.has(key))
-    ) {
+    if (keys.some((key) => !expected.has(key))) {
       throw new Error(
         `rows[${rowIndex}] does not match the declared table columns.`,
       );

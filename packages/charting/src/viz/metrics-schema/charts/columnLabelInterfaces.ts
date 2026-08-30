@@ -67,9 +67,8 @@ export const ColumnLabelFormatSchema = z.object({
     .default(null),
 });
 
-export const DEFAULT_COLUMN_LABEL_FORMAT: ColumnLabelFormat = getDefaults(
-  ColumnLabelFormatSchema,
-);
+export const DEFAULT_COLUMN_LABEL_FORMAT: Partial<ColumnLabelFormat> =
+  getDefaults(ColumnLabelFormatSchema);
 
 // Export inferred types
 export type ColumnLabelFormat = z.infer<typeof ColumnLabelFormatSchema>;

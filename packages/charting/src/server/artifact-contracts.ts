@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isCanonicalDatetimeString } from "@forty-two/artifacts";
+
 import {
   GoalLineSchema,
   TrendlineSchema,
@@ -14,9 +16,17 @@ import { ColumnLabelFormatSchema } from "../viz/metrics-schema/charts/columnLabe
 import { DerivedMetricTitleSchema } from "../viz/metrics-schema/charts/metricChartProps.js";
 import { ChartTypeSchema } from "../viz/metrics-schema/charts/enum.js";
 
+const ColumnNameSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine((value) => value.trim().length > 0, {
+    message: "Column names must be non-blank",
+  });
+
 export const ChartArtifactColumnV1Schema = z
   .object({
-    name: z.string().trim().min(1).max(256),
+    name: ColumnNameSchema,
     type: z.enum([
       "string",
       "number",
@@ -31,7 +41,6 @@ export const ChartArtifactColumnV1Schema = z
   })
   .strict();
 
-const ColumnNameSchema = z.string().trim().min(1).max(256);
 const SingleColumnSchema = z.array(ColumnNameSchema).length(1);
 const OptionalSingleColumnSchema = z.array(ColumnNameSchema).max(1).default([]);
 const TooltipSchema = z
@@ -391,10 +400,58 @@ function chartCellMatchesColumn(
     case "boolean":
       return typeof value === "boolean";
     case "datetime":
-      return typeof value === "string" && Number.isFinite(Date.parse(value));
+      return typeof value === "string" && isCanonicalDatetimeString(value);
     case "json":
-      return true;
+      return isJsonValue(value);
   }
+}
+
+function isJsonValue(
+  value: unknown,
+  ancestors: Set<object> = new Set(),
+): boolean {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+  if (ancestors.has(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    !Array.isArray(value) &&
+    prototype !== Object.prototype &&
+    prototype !== null
+  ) {
+    return false;
+  }
+  ancestors.add(value);
+  let valid: boolean;
+  if (Array.isArray(value)) {
+    valid =
+      Object.keys(value).length === value.length &&
+      Reflect.ownKeys(value).every(
+        (key) =>
+          key === "length" ||
+          (typeof key === "string" && /^(?:0|[1-9]\d*)$/.test(key)),
+      ) &&
+      value.every((entry) => isJsonValue(entry, ancestors));
+  } else {
+    valid =
+      Reflect.ownKeys(value).every(
+        (key) =>
+          typeof key === "string" &&
+          Object.prototype.propertyIsEnumerable.call(value, key),
+      ) &&
+      Object.values(value as Record<string, unknown>).every((entry) =>
+        isJsonValue(entry, ancestors),
+      );
+  }
+  ancestors.delete(value);
+  return valid;
 }
 
 export function validateChartConfigV1(input: {

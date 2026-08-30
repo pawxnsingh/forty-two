@@ -81,7 +81,7 @@ export const ColumnSettingsSchema = z.object({
   conditionalColors: z.array(ConditionalColorSchema).default([]),
 });
 
-export const DEFAULT_COLUMN_SETTINGS: ColumnSettings =
+export const DEFAULT_COLUMN_SETTINGS: Partial<ColumnSettings> =
   getDefaults(ColumnSettingsSchema);
 
 // Export inferred types

@@ -28,7 +28,7 @@ MAX_STRING_BYTES = 64 * 1024
 MAX_PREVIEW_ROWS = 30
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 SHARED_MCP_SERVER = "forty-two-data-source"
-SESSION_ID_PATTERN = re.compile(r"^sess_[0-9A-HJKMNP-TV-Z]{26}$")
+SESSION_ID_PATTERN = re.compile(r"^sess_[0-7][0-9A-HJKMNP-TV-Z]{25}$")
 CHART_TYPES_V1 = frozenset(
     {"bar", "line", "scatter", "pie", "combo", "metric", "table"}
 )
@@ -275,6 +275,14 @@ def _javascript_object_keys(value: Mapping[str, Any]) -> list[str]:
     return [key for _numeric, key in sorted(indexed)] + ordinary
 
 
+def _utf16_sort_key(value: str) -> bytes:
+    return value.encode("utf-16-be", "surrogatepass")
+
+
+def _utf16_length(value: str) -> int:
+    return len(value.encode("utf-16-le", "surrogatepass")) // 2
+
+
 def _canonical_dumps(value: Any) -> str:
     if value is None:
         return "null"
@@ -322,15 +330,18 @@ def _json_value(value: Any, path: str) -> Any:
     if isinstance(value, dt.date):
         return value.isoformat()
     if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for key in sorted(value, key=str):
+        keyed: dict[str, Any] = {}
+        for key in value:
             string_key = str(key)
-            if string_key in result:
+            if string_key in keyed:
                 raise ValueError(
                     f"{path} contains keys that collide after string conversion"
                 )
-            result[string_key] = _json_value(value[key], f"{path}.{string_key}")
-        return result
+            keyed[string_key] = value[key]
+        return {
+            key: _json_value(keyed[key], f"{path}.{key}")
+            for key in sorted(keyed, key=_utf16_sort_key)
+        }
     if isinstance(value, (list, tuple)):
         return [_json_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
     if hasattr(value, "item"):
@@ -387,6 +398,8 @@ def _canonicalize_dataframe(dataframe: Any) -> tuple[bytes, list[dict[str, Any]]
         raise ValueError("Table must contain between 1 and 100 columns")
     if any(not isinstance(name, str) or not name.strip() for name in names):
         raise ValueError("DataFrame column names must be non-blank strings")
+    if any(_utf16_length(name) > 256 for name in names):
+        raise ValueError("DataFrame column names must not exceed 256 UTF-16 code units")
     if len(set(names)) != len(names):
         raise ValueError("DataFrame column names must be unique")
     row_count = len(dataframe.index)
@@ -503,6 +516,125 @@ def _get_bytes(url: str, headers: Mapping[str, str], expected_etag: str) -> byte
     return payload
 
 
+_ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
+_DECIMAL_PATTERN = re.compile(r"^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+_INTEGER_PATTERN = re.compile(r"^-?\d+$")
+_TABLE_TYPES = frozenset(
+    {"string", "number", "integer", "decimal", "boolean", "datetime", "json"}
+)
+
+
+def _is_canonical_datetime(value: str) -> bool:
+    try:
+        if _ISO_DATE_PATTERN.fullmatch(value):
+            dt.date.fromisoformat(value)
+            return True
+        if not _ISO_DATETIME_PATTERN.fullmatch(value):
+            return False
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.tzinfo is not None and parsed.utcoffset() is not None
+    except ValueError:
+        return False
+
+
+def _is_json_value(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bool)):
+        return not isinstance(value, str) or len(value.encode("utf-8")) <= MAX_STRING_BYTES
+    if isinstance(value, int):
+        return not isinstance(value, bool) and abs(value) <= MAX_SAFE_INTEGER
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
+
+
+def _validate_table_contract(header: Any, rows: list[Any]) -> None:
+    if (
+        not isinstance(header, dict)
+        or set(header) != {"$schema", "columns", "rowCount"}
+        or header.get("$schema") != "table.v1"
+        or not isinstance(header.get("columns"), list)
+        or isinstance(header.get("rowCount"), bool)
+        or not isinstance(header.get("rowCount"), int)
+        or not 0 <= header["rowCount"] <= MAX_ROWS
+        or header["rowCount"] != len(rows)
+        or not 1 <= len(header["columns"]) <= MAX_COLUMNS
+    ):
+        raise RuntimeError("Downloaded artifact table.v1 header is invalid")
+
+    names: list[str] = []
+    for column in header["columns"]:
+        if (
+            not isinstance(column, dict)
+            or not {"name", "type", "nullable"}.issubset(column)
+            or not set(column).issubset({"name", "type", "nullable", "encoding"})
+            or not isinstance(column["name"], str)
+            or not column["name"].strip()
+            or _utf16_length(column["name"]) > 256
+            or column["type"] not in _TABLE_TYPES
+            or not isinstance(column["nullable"], bool)
+            or (
+                "encoding" in column
+                and column["encoding"] not in {"json", "string"}
+            )
+        ):
+            raise RuntimeError("Downloaded artifact table.v1 columns are invalid")
+        names.append(column["name"])
+    if len(set(names)) != len(names):
+        raise RuntimeError("Downloaded artifact table.v1 columns are invalid")
+
+    expected = set(names)
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != expected:
+            raise RuntimeError("Downloaded artifact row does not match its columns")
+        for column in header["columns"]:
+            value = row[column["name"]]
+            if value is None:
+                if not column["nullable"]:
+                    raise RuntimeError("Downloaded artifact contains a forbidden null")
+                continue
+            kind = column["type"]
+            valid = False
+            if kind == "string":
+                valid = isinstance(value, str) and len(value.encode("utf-8")) <= MAX_STRING_BYTES
+            elif kind == "number":
+                valid = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    and (not isinstance(value, int) or abs(value) <= MAX_SAFE_INTEGER)
+                )
+            elif kind == "integer":
+                valid = (
+                    isinstance(value, str)
+                    and column.get("encoding") == "string"
+                    and _INTEGER_PATTERN.fullmatch(value) is not None
+                ) or (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and column.get("encoding") != "string"
+                    and abs(value) <= MAX_SAFE_INTEGER
+                )
+            elif kind == "decimal":
+                valid = isinstance(value, str) and _DECIMAL_PATTERN.fullmatch(value) is not None
+            elif kind == "boolean":
+                valid = isinstance(value, bool)
+            elif kind == "datetime":
+                valid = isinstance(value, str) and _is_canonical_datetime(value)
+            elif kind == "json":
+                valid = _is_json_value(value)
+            if not valid:
+                raise RuntimeError(
+                    f"Downloaded artifact row {row_index} has an invalid {column['name']!r} cell"
+                )
+
+
 def _parse_canonical(payload: bytes) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     try:
         text = payload.decode("utf-8")
@@ -516,14 +648,7 @@ def _parse_canonical(payload: bytes) -> tuple[dict[str, Any], list[dict[str, Any
         rows = [json.loads(line) for line in lines[1:]]
     except (IndexError, json.JSONDecodeError) as exc:
         raise RuntimeError("Downloaded artifact is not canonical table.v1 JSONL") from exc
-    if (
-        not isinstance(header, dict)
-        or header.get("$schema") != "table.v1"
-        or not isinstance(header.get("columns"), list)
-        or header.get("rowCount") != len(rows)
-        or not all(isinstance(row, dict) for row in rows)
-    ):
-        raise RuntimeError("Downloaded artifact table.v1 header is invalid")
+    _validate_table_contract(header, rows)
     canonical = "\n".join(_canonical_dumps(item) for item in [header, *rows]) + "\n"
     if canonical.encode("utf-8") != payload:
         raise RuntimeError("Downloaded artifact is not canonical table.v1 JSONL")
@@ -590,7 +715,7 @@ def _column_list(
         or any(not isinstance(item, str) or not item.strip() for item in value)
     ):
         raise ValueError(f"{label} is invalid")
-    result = [item.strip() for item in value]
+    result = list(value)
     missing = [item for item in result if item not in columns]
     if missing:
         raise ValueError(f"Chart column {missing[0]!r} does not exist in the source artifact")
@@ -616,6 +741,7 @@ def _chart_number(
         not isinstance(value, (int, float))
         or isinstance(value, bool)
         or not math.isfinite(value)
+        or (isinstance(value, int) and abs(value) > MAX_SAFE_INTEGER)
         or (minimum is not None and value < minimum)
         or (maximum is not None and value > maximum)
     ):

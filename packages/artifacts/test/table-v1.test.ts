@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   MAX_ARTIFACT_BYTES,
+  inferTableColumnsV1,
   parseCanonicalTableV1,
   serializeCanonicalTableV1,
 } from "../src/index.js";
@@ -62,9 +63,9 @@ describe("canonical table.v1", () => {
       () =>
         serializeCanonicalTableV1({
           columns,
-          rows: [{ Sales: 1, Identifier: "1" }],
+          rows: [{ Sales: 1, ObservedAt: null }],
         }),
-      /does not match/,
+      /cannot be null/,
     );
     assert.throws(
       () =>
@@ -77,6 +78,83 @@ describe("canonical table.v1", () => {
     assert.throws(
       () => parseCanonicalTableV1(Buffer.alloc(MAX_ARTIFACT_BYTES + 1)),
       /5 MiB/,
+    );
+  });
+
+  it("normalizes omitted nullable cells and enforces canonical datetimes", () => {
+    const sparseRows = [{ value: 1 }, {}];
+    const inferred = inferTableColumnsV1(sparseRows);
+    const sparse = serializeCanonicalTableV1({
+      columns: inferred,
+      rows: sparseRows,
+    });
+    assert.deepEqual(sparse.rows, [{ value: 1 }, { value: null }]);
+    assert.throws(
+      () =>
+        serializeCanonicalTableV1({
+          columns: [{ name: "value", type: "integer", nullable: false }],
+          rows: [{}],
+        }),
+      /cannot be null/,
+    );
+    for (const value of [
+      "1",
+      "08/30/2026",
+      "2026-02-30",
+      "2026-08-30T12:00:00",
+    ]) {
+      assert.throws(() =>
+        serializeCanonicalTableV1({
+          columns: [{ name: "at", type: "datetime", nullable: false }],
+          rows: [{ at: value }],
+        }),
+      );
+    }
+    for (const value of [
+      "2026-08-30",
+      "2026-08-30T12:00:00Z",
+      "2026-08-30T12:00:00.123+05:30",
+    ]) {
+      assert.doesNotThrow(() =>
+        serializeCanonicalTableV1({
+          columns: [{ name: "at", type: "datetime", nullable: false }],
+          rows: [{ at: value }],
+        }),
+      );
+    }
+  });
+
+  it("orders nested JSON keys by UTF-16 identically to Python", () => {
+    const helperPath = fileURLToPath(
+      new URL("../python/forty_two_artifacts.py", import.meta.url),
+    );
+    const python = spawnSync("python3", ["-", helperPath], {
+      encoding: "utf8",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+      input: `
+import base64, importlib.util, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("forty_two_artifacts_unicode_probe", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+class Frame:
+    columns = ["payload"]
+    index = range(1)
+    def itertuples(self, index=False, name=None):
+        return iter([({"\\ue000": 1, "\\U00010000": 2},)])
+payload, _columns, _rows = module._canonicalize_dataframe(Frame())
+print(base64.b64encode(payload).decode("ascii"))
+`,
+    });
+    assert.equal(python.status, 0, python.stderr);
+    const typescript = serializeCanonicalTableV1({
+      columns: [{ name: "payload", type: "json", nullable: false }],
+      rows: [{ payload: { "\ue000": 1, "\u{10000}": 2 } }],
+    });
+    assert.equal(
+      Buffer.from(python.stdout.trim(), "base64").toString("utf8"),
+      typescript.bytes.toString("utf8"),
     );
   });
 

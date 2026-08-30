@@ -127,6 +127,12 @@ class HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "64 KiB"):
             MODULE._canonicalize_dataframe(oversized)
 
+        for name in ("x" * 257, "\U00010000" * 129):
+            with self.assertRaisesRegex(ValueError, "256 UTF-16"):
+                MODULE._canonicalize_dataframe(FakeFrame([(1,)], [name]))
+        for name in ("x" * 256, "\U00010000" * 128):
+            MODULE._canonicalize_dataframe(FakeFrame([(1,)], [name]))
+
     def test_canonicalization_rejects_json_key_collisions_and_supports_dates(self) -> None:
         collision = FakeFrame([({1: "a", "1": "b"},)], ["payload"])
         with self.assertRaisesRegex(ValueError, "collide"):
@@ -137,6 +143,12 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(columns[0]["type"], "datetime")
         self.assertEqual(rows[0]["day"], "2026-08-30")
         self.assertIn(b'"day":"2026-08-30"', payload)
+
+        unicode_keys = FakeFrame(
+            [({"\ue000": 1, "\U00010000": 2},)], ["payload"]
+        )
+        payload, _columns, _rows = MODULE._canonicalize_dataframe(unicode_keys)
+        self.assertLess(payload.index("\U00010000".encode()), payload.index("\ue000".encode()))
 
     def test_mixed_float_and_large_integer_uses_decimal_string_encoding(self) -> None:
         frame = FakeFrame([(1.5,), (9_007_199_254_740_993,)], ["value"])
@@ -223,6 +235,46 @@ class HelperTests(unittest.TestCase):
         ):
             loaded = MODULE.load_table("art_01ARZ3NDEKTSV4RRFFQ69G5FAV", SESSION_ID)
         self.assertEqual(loaded.to_dict("records"), [{"Sales": 1.5, "Profit": 2.5}])
+
+    def test_parse_rejects_rows_that_violate_declared_table_contract(self) -> None:
+        header = {
+            "$schema": "table.v1",
+            "columns": [{"name": "value", "type": "integer", "nullable": False}],
+            "rowCount": 1,
+        }
+        invalid_rows = [
+            {"value": "wrong"},
+            {"value": None},
+            {},
+            {"value": 1, "extra": 2},
+        ]
+        for row in invalid_rows:
+            payload = (
+                MODULE._canonical_dumps(header)
+                + "\n"
+                + MODULE._canonical_dumps(row)
+                + "\n"
+            ).encode()
+            with self.assertRaisesRegex(RuntimeError, "Downloaded artifact"):
+                MODULE._parse_canonical(payload)
+
+    def test_chart_numbers_and_column_references_preserve_shared_contract(self) -> None:
+        self.assertEqual(
+            MODULE._chart_number(MODULE.MAX_SAFE_INTEGER, "value"),
+            MODULE.MAX_SAFE_INTEGER,
+        )
+        self.assertEqual(
+            MODULE._chart_number(-MODULE.MAX_SAFE_INTEGER, "value"),
+            -MODULE.MAX_SAFE_INTEGER,
+        )
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            MODULE._chart_number(MODULE.MAX_SAFE_INTEGER + 1, "value")
+        self.assertEqual(
+            MODULE._column_list([" Sales "], "axis", 1, 1, {" Sales "}),
+            [" Sales "],
+        )
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            MODULE._column_list(["Sales"], "axis", 1, 1, {" Sales "})
 
     def test_server_discovery_is_exact_and_does_not_accept_ambiguous_connectors(self) -> None:
         self.assertEqual(MODULE._mcp_server_name(), "forty-two-data-source")

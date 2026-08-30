@@ -168,6 +168,9 @@ importers:
 
   packages/charting:
     dependencies:
+      '@forty-two/artifacts':
+        specifier: workspace:*
+        version: link:../artifacts
       zod:
         specifier: ^4.4.3
         version: 4.4.3

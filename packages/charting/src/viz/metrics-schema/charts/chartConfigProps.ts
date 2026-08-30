@@ -59,7 +59,7 @@ export const ChartConfigPropsSchema = z.object({
   ...MetricChartPropsSchema.shape,
 });
 
-export const DEFAULT_CHART_CONFIG: ChartConfigProps = getDefaults(
+export const DEFAULT_CHART_CONFIG: Partial<ChartConfigProps> = getDefaults(
   ChartConfigPropsSchema,
 );
 

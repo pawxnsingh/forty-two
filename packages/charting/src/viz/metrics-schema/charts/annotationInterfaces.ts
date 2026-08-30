@@ -53,7 +53,7 @@ export const TrendlineSchema = z.object({
   id: z.string(),
 });
 
-export const DEFAULT_TRENDLINE_CONFIG: Required<Trendline> =
+export const DEFAULT_TRENDLINE_CONFIG: Partial<Trendline> =
   getDefaults(TrendlineSchema);
 
 // Export inferred types

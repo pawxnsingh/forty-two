@@ -10,6 +10,8 @@ import {
   validateChartConfigV1,
 } from "../src/server/artifact-contracts.js";
 import { ChartConfigPropsSchema } from "../src/viz/metrics-schema/charts/chartConfigProps.js";
+import { DEFAULT_CHART_CONFIG } from "../src/viz/metrics-schema/charts/chartConfigProps.js";
+import { DEFAULT_TRENDLINE_CONFIG } from "../src/viz/metrics-schema/charts/annotationInterfaces.js";
 import {
   ChartTypePlottableSchema,
   ChartTypeSchema,
@@ -282,5 +284,81 @@ describe("chart.v1 server contracts", () => {
       }).success,
       false,
     );
+  });
+
+  it("accepts only serializable JSON cells", () => {
+    const envelope = {
+      schemaVersion: "chart.v1",
+      id: "art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      sourceArtifactId: "art_01ARZ3NDEKTSV4RRFFQ69G5FAA",
+      sourceContentSha256: "a".repeat(64),
+      title: "Payload",
+      description: null,
+      config: { selectedChartType: "table", tableColumnOrder: ["payload"] },
+      columns: [{ name: "payload", type: "json", nullable: false }],
+      rowCount: 1,
+      sourceLimited: false,
+      data: [{ payload: { nested: [1, true, null, "ok"] } }],
+      createdAt: "2026-08-30T12:00:00Z",
+    };
+    assert.equal(
+      ChartArtifactEnvelopeV1Schema.safeParse(envelope).success,
+      true,
+    );
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const symbolKeyed = { valid: true } as Record<PropertyKey, unknown>;
+    symbolKeyed[Symbol("hidden")] = "lost";
+    const sparse = Array(1);
+    for (const payload of [
+      undefined,
+      1n,
+      new Date(),
+      { nested: Number.NaN },
+      cyclic,
+      symbolKeyed,
+      sparse,
+    ]) {
+      assert.equal(
+        ChartArtifactEnvelopeV1Schema.safeParse({
+          ...envelope,
+          data: [{ payload }],
+        }).success,
+        false,
+      );
+    }
+  });
+
+  it("preserves exact whitespace-bearing column identities", () => {
+    const whitespaceColumns = [
+      { name: " Sales ", type: "number" as const, nullable: false },
+    ];
+    assert.doesNotThrow(() =>
+      validateChartConfigV1({
+        columns: whitespaceColumns,
+        rowCount: 1,
+        config: {
+          selectedChartType: "scatter",
+          scatterAxis: { x: [" Sales "], y: [" Sales "] },
+        },
+      }),
+    );
+    assert.throws(() =>
+      validateChartConfigV1({
+        columns: whitespaceColumns,
+        rowCount: 1,
+        config: {
+          selectedChartType: "scatter",
+          scatterAxis: { x: ["Sales"], y: [" Sales "] },
+        },
+      }),
+    );
+  });
+
+  it("extracts declared defaults without pretending required fields exist", () => {
+    assert.equal(DEFAULT_CHART_CONFIG.selectedChartType, "table");
+    assert.equal(DEFAULT_TRENDLINE_CONFIG.type, "linear_regression");
+    assert.equal("columnId" in DEFAULT_TRENDLINE_CONFIG, false);
+    assert.equal("id" in DEFAULT_TRENDLINE_CONFIG, false);
   });
 });
