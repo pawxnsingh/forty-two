@@ -8,12 +8,24 @@ import type { Column } from "../src/types/introspection.js";
 import {
   buildBigQueryBackfillScript,
   buildBigQueryRowMutationScript,
+  prepareControlledSqlChange,
   prepareStructuredColumnChange,
   parseSqlChange,
   structuredColumnTypeMatches,
   StructuredColumnChangeSchema,
   type SqlChangeDialect,
 } from "../src/mutations/index.js";
+
+test("Snowflake controlled INSERT fails before provider preview", async () => {
+  await assert.rejects(
+    prepareControlledSqlChange({
+      adapter: {} as DatabaseAdapter,
+      dialect: "snowflake",
+      sql: "INSERT INTO inventory (id, quantity) VALUES (7, 4)",
+    }),
+    /controlled INSERT is unavailable/,
+  );
+});
 
 const DIALECTS: SqlChangeDialect[] = [
   "postgresql",

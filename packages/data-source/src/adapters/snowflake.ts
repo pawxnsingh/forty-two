@@ -476,6 +476,11 @@ export class SnowflakeAdapter extends BaseAdapter {
   override async applyControlledMutation(
     input: ApplyControlledMutationInput,
   ): Promise<ApplyControlledMutationResult> {
+    if (input.operation === "insert") {
+      throw new Error(
+        "Snowflake controlled INSERT is unavailable because standard-table uniqueness constraints are not enforced.",
+      );
+    }
     return this.queryMutex.runExclusive(async () => {
       const timeoutMs = resolveQueryTimeout(
         input.timeout,

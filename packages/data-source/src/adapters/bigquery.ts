@@ -460,7 +460,6 @@ export class BigQueryAdapter extends BaseAdapter {
     if (!this.client) throw new Error("BigQuery client not initialized");
     let ddlCompleted = input.skipDdl === true;
     try {
-      if (!input.skipDdl) ddlCompleted = true;
       const ddlJob = input.skipDdl
         ? null
         : await this.runIdempotentMutationJob(
@@ -473,6 +472,7 @@ export class BigQueryAdapter extends BaseAdapter {
             `${input.executionToken}_ddl`,
             input.ddlSql,
           );
+      if (ddlJob) ddlCompleted = true;
       let rowCount = 0;
       let backfillJobId: string | undefined;
       let finalEvidence: Record<string, unknown> = {};

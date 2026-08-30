@@ -29,6 +29,11 @@ export async function prepareControlledSqlChange(input: {
     throw new Error("SQL change row limit must be between 1 and 100.");
   }
   const parsed = parseSqlChange(input.sql, input.dialect);
+  if (input.dialect === "snowflake" && parsed.operation === "insert") {
+    throw new Error(
+      "Snowflake controlled INSERT is unavailable because standard-table uniqueness constraints are not enforced.",
+    );
+  }
   const resolvedTarget = normalizeSqlChangeTarget(parsed.target, input.dialect);
   const columns = await input.adapter
     .introspect()
