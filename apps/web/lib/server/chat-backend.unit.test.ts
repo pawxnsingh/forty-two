@@ -591,6 +591,7 @@ test("turn idempotency rejects message drift and ambiguous retries", async () =>
 test("turn requests without an idempotency key remain distinct", async () => {
   let createCalls = 0;
   let beginCalls = 0;
+  const sessionTitles: Array<string | undefined> = [];
   const dependencies = {
     reserve: async () => {
       throw new Error("unexpected reserve");
@@ -602,8 +603,9 @@ test("turn requests without an idempotency key remain distinct", async () => {
     markIndeterminate: async () => {
       throw new Error("unexpected indeterminate");
     },
-    beginQuestion: async () => {
+    beginQuestion: async (input) => {
       beginCalls += 1;
+      sessionTitles.push(input.sessionTitle);
     },
     trueforgeSessionId: async () => "trueforge-session",
     createTurn: async () => turnResponse(`turn-${++createCalls}`),
@@ -631,6 +633,7 @@ test("turn requests without an idempotency key remain distinct", async () => {
   assert.equal(first.data.id, "turn-1");
   assert.equal(second.data.id, "turn-2");
   assert.equal(beginCalls, 2);
+  assert.deepEqual(sessionTitles, ["Analyze this", "Analyze this"]);
 });
 
 test("public session creation rejects raw AgentSpecs and connector names", async () => {
@@ -667,6 +670,7 @@ test("deleted idempotency winners fail immediately", () => {
     capabilityRevokedAt: now,
     idempotencyKey: "deleted-key",
     idempotencyRequestHash: "a".repeat(64),
+    title: null,
     status: "deleted",
     failureMessage: null,
     plan: null,
@@ -694,6 +698,7 @@ test("cleanup retries after immediate durable revocation", async () => {
     capabilityRevokedAt: null,
     idempotencyKey: null,
     idempotencyRequestHash: null,
+    title: null,
     status: "active",
     failureMessage: null,
     plan: null,

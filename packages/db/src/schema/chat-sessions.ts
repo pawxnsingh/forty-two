@@ -44,6 +44,7 @@ export const chatSessions = pgTable(
     }),
     idempotencyKey: text("idempotency_key").unique(),
     idempotencyRequestHash: text("idempotency_request_hash"),
+    title: text("title"),
     status: chatSessionStatusEnum("status").default("creating").notNull(),
     failureMessage: text("failure_message"),
     plan: jsonb("plan").$type<SessionPlan>(),
@@ -101,6 +102,10 @@ export const chatSessions = pgTable(
     check(
       "chat_sessions_idempotency_hash_check",
       sql`${table.idempotencyRequestHash} IS NULL OR ${table.idempotencyRequestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "chat_sessions_title_check",
+      sql`${table.title} IS NULL OR (char_length(${table.title}) BETWEEN 1 AND 200 AND btrim(${table.title}) = ${table.title})`,
     ),
     check(
       "chat_sessions_deleted_state_check",

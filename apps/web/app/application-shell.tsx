@@ -36,12 +36,12 @@ const sidebarConnectorIcons = [
 });
 
 function sessionLabel(session: SessionSummary) {
+  if (session.title) return session.title;
   const savedTitle =
     typeof window === "undefined"
       ? null
       : localStorage.getItem(`forty-two-session-title:${session.id}`);
   if (savedTitle) return savedTitle;
-  if (session.title) return session.title;
   return new Intl.DateTimeFormat("en", {
     day: "numeric",
     hour: "numeric",
@@ -103,8 +103,8 @@ export function FortyTwoApplicationShell({
         const response = await fetch(
           "/api/chat/sessions?limit=25&status=active",
           {
-          cache: "no-store",
-          signal: controller.signal,
+            cache: "no-store",
+            signal: controller.signal,
           },
         );
         if (!response.ok) return;

@@ -152,10 +152,15 @@ describe("session plan repositories against PostgreSQL", () => {
     const reset = await beginChatSessionQuestion({
       chatSessionId: session.id,
       questionKey: "question-one",
+      sessionTitle: "First user message",
     });
     assert.equal(reset.reset, true);
     assert.equal(reset.plan, null);
     assert.equal(reset.revision, 2);
+    const titled = await testSql<{ title: string }[]>`
+      select title from chat_sessions where id = ${session.id}
+    `;
+    assert.equal(titled[0]?.title, "First user message");
 
     await setChatSessionPlan({
       chatSessionId: session.id,
@@ -165,10 +170,15 @@ describe("session plan repositories against PostgreSQL", () => {
     const retry = await beginChatSessionQuestion({
       chatSessionId: session.id,
       questionKey: "question-one",
+      sessionTitle: "A later user message",
     });
     assert.equal(retry.reset, false);
     assert.equal(retry.plan?.title, "Current question");
     assert.equal(retry.revision, 3);
+    const stillTitled = await testSql<{ title: string }[]>`
+      select title from chat_sessions where id = ${session.id}
+    `;
+    assert.equal(stillTitled[0]?.title, "First user message");
 
     const creating = await createChatSession({
       dataSourceIds: [],

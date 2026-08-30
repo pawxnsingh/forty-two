@@ -1,0 +1,2 @@
+ALTER TABLE "chat_sessions" ADD COLUMN "title" text;--> statement-breakpoint
+ALTER TABLE "chat_sessions" ADD CONSTRAINT "chat_sessions_title_check" CHECK ("chat_sessions"."title" IS NULL OR (char_length("chat_sessions"."title") BETWEEN 1 AND 200 AND btrim("chat_sessions"."title") = "chat_sessions"."title"));

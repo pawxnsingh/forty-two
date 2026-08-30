@@ -6,6 +6,7 @@ import {
   MAX_PLAN_ITEM_TEXT_LENGTH,
   MAX_PLAN_SUMMARY_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
+  MAX_CHAT_SESSION_TITLE_LENGTH,
   PlanItemStatusSchema,
   SessionPlanSchema,
   SessionPlanSnapshotSchema,
@@ -57,6 +58,12 @@ export type GetChatSessionPlanInput = z.input<
 export const BeginChatSessionQuestionInputSchema = z.object({
   chatSessionId: ChatSessionIdSchema,
   questionKey: z.string().trim().min(1).max(255),
+  sessionTitle: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_CHAT_SESSION_TITLE_LENGTH)
+    .optional(),
 });
 export type BeginChatSessionQuestionInput = z.input<
   typeof BeginChatSessionQuestionInputSchema
@@ -163,6 +170,9 @@ export async function beginChatSessionQuestion(
       .update(chatSessions)
       .set({
         planQuestionKey: parsed.questionKey,
+        ...(row.title === null && parsed.sessionTitle
+          ? { title: parsed.sessionTitle }
+          : {}),
         ...(reset
           ? {
               plan: null,
@@ -181,6 +191,44 @@ export async function beginChatSessionQuestion(
 
     return { ...parseSnapshot(returned[0]!), reset };
   });
+}
+
+export async function setChatSessionTitleIfEmpty(input: {
+  chatSessionId: string;
+  title: string;
+}): Promise<string | null> {
+  const parsed = z
+    .object({
+      chatSessionId: ChatSessionIdSchema,
+      title: z.string().trim().min(1).max(MAX_CHAT_SESSION_TITLE_LENGTH),
+    })
+    .parse(input);
+  const rows = await getDatabase()
+    .update(chatSessions)
+    .set({ title: parsed.title })
+    .where(
+      and(
+        eq(chatSessions.id, parsed.chatSessionId),
+        eq(chatSessions.status, "active"),
+        isNull(chatSessions.deletedAt),
+        isNull(chatSessions.title),
+      ),
+    )
+    .returning({ title: chatSessions.title });
+  if (rows[0]?.title) return rows[0].title;
+
+  const existing = await getDatabase()
+    .select({ title: chatSessions.title })
+    .from(chatSessions)
+    .where(
+      and(
+        eq(chatSessions.id, parsed.chatSessionId),
+        eq(chatSessions.status, "active"),
+        isNull(chatSessions.deletedAt),
+      ),
+    )
+    .limit(1);
+  return existing[0]?.title ?? null;
 }
 
 async function mutatePlan(

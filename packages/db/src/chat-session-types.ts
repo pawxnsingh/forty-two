@@ -24,6 +24,7 @@ export const MAX_PLAN_ITEMS = 15;
 export const MAX_PLAN_TITLE_LENGTH = 200;
 export const MAX_PLAN_ITEM_TEXT_LENGTH = 500;
 export const MAX_PLAN_SUMMARY_LENGTH = 1_000;
+export const MAX_CHAT_SESSION_TITLE_LENGTH = 200;
 
 export const PlanItemStatusSchema = z.enum(PLAN_ITEM_STATUSES);
 export type PlanItemStatus = z.infer<typeof PlanItemStatusSchema>;
@@ -60,6 +61,7 @@ export const ChatSessionSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/)
     .nullable(),
+  title: z.string().trim().min(1).max(MAX_CHAT_SESSION_TITLE_LENGTH).nullable(),
   status: ChatSessionStatusSchema,
   failureMessage: z.string().min(1).max(4000).nullable(),
   plan: SessionPlanSchema.nullable(),

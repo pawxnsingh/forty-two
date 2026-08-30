@@ -5,7 +5,11 @@ import {
   trueForgeClient,
   validId,
 } from "../../../../../lib/server/chat-backend";
-import { listChatSessionDataSources } from "@forty-two/db";
+import {
+  listChatSessionDataSources,
+  setChatSessionTitleIfEmpty,
+} from "@forty-two/db";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 
@@ -32,6 +36,7 @@ export async function GET(
       data: {
         ...runtimeData,
         id: validId(sessionId, "session id"),
+        title: application.title,
         dataSources: dataSources.map((source) => ({
           id: source.id,
           name: source.name,
@@ -40,6 +45,32 @@ export async function GET(
         })),
       },
     });
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  context: RouteContext,
+): Promise<Response> {
+  try {
+    const { sessionId } = await context.params;
+    const body = z
+      .object({ title: z.string().trim().min(1).max(200) })
+      .strict()
+      .parse(await request.json());
+    const title = await setChatSessionTitleIfEmpty({
+      chatSessionId: validId(sessionId, "session id"),
+      title: body.title,
+    });
+    if (!title) {
+      return Response.json(
+        { error: { message: "Session not found." } },
+        { status: 404 },
+      );
+    }
+    return Response.json({ data: { title } });
   } catch (error) {
     return apiError(error);
   }

@@ -171,7 +171,8 @@ export async function renewArtifactCapability(
 ): Promise<{ artifactCapability: string }> {
   const authorization = request.headers.get("authorization") ?? "";
   const match = /^Bearer ([^\s,]+)$/i.exec(authorization);
-  if (!match) throw new ApiInputError("Artifact capability was not found.", 404);
+  if (!match)
+    throw new ApiInputError("Artifact capability was not found.", 404);
 
   const claims = verifyArtifactBrowserCapability({
     token: match[1]!,
@@ -233,6 +234,7 @@ export interface ApplicationTurnDependencies {
   beginQuestion(input: {
     chatSessionId: string;
     questionKey: string;
+    sessionTitle?: string;
   }): Promise<unknown>;
   trueforgeSessionId(applicationSessionId: string): Promise<string>;
   createTurn(
@@ -286,11 +288,16 @@ export async function createApplicationTurn(
   request: Request,
   dependencies: ApplicationTurnDependencies = defaultApplicationTurnDependencies,
 ): Promise<TrueForgeApi.GetTurnResponse> {
+  const sessionTitle = userMessage.content
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
   const idempotencyKey = optionalIdempotencyKey(request);
   if (!idempotencyKey) {
     await dependencies.beginQuestion({
       chatSessionId: applicationSessionId,
       questionKey: randomUUID(),
+      sessionTitle,
     });
     return dependencies.createTurn(
       await dependencies.trueforgeSessionId(applicationSessionId),
@@ -325,6 +332,7 @@ export async function createApplicationTurn(
     await dependencies.beginQuestion({
       chatSessionId: applicationSessionId,
       questionKey: idempotencyKey,
+      sessionTitle,
     });
     const turn = await dependencies.createTurn(trueforgeSession, userMessage);
     const trueforgeTurnId = validId(turn.data.id, "turn id");

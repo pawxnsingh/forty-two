@@ -28,6 +28,7 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({
       data: sessions.slice(0, limit).map((session) => ({
         id: session.id,
+        title: session.title,
         status: session.status,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,

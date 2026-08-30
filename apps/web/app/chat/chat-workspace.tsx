@@ -805,56 +805,64 @@ export function ChatWorkspace({
     [initialSessionId],
   );
 
-  const loadSources = useCallback(async (signal: AbortSignal) => {
-    if (initialSessionId) {
-      const sessionResponse = await fetch(
-        `/api/chat/sessions/${initialSessionId}`,
-        { cache: "no-store", signal },
-      );
-      if (signal.aborted) return;
-      if (!sessionResponse.ok) {
-        setError(
-          await apiMessage(sessionResponse, "Session sources are unavailable."),
+  const loadSources = useCallback(
+    async (signal: AbortSignal) => {
+      if (initialSessionId) {
+        const sessionResponse = await fetch(
+          `/api/chat/sessions/${initialSessionId}`,
+          { cache: "no-store", signal },
+        );
+        if (signal.aborted) return;
+        if (!sessionResponse.ok) {
+          setError(
+            await apiMessage(
+              sessionResponse,
+              "Session sources are unavailable.",
+            ),
+          );
+          return;
+        }
+        const payload = (await sessionResponse.json()) as {
+          data: { dataSources: DataSource[] };
+        };
+        if (signal.aborted) return;
+        setSources(payload.data.dataSources);
+        setSelectedSourceIds(
+          payload.data.dataSources.map((source) => source.id),
         );
         return;
       }
-      const payload = (await sessionResponse.json()) as {
-        data: { dataSources: DataSource[] };
-      };
-      if (signal.aborted) return;
-      setSources(payload.data.dataSources);
-      setSelectedSourceIds(payload.data.dataSources.map((source) => source.id));
-      return;
-    }
-    const sourceResponse = await fetch(
-      "/api/data-sources?status=ready&limit=100",
-      { cache: "no-store", signal },
-    );
-    if (signal.aborted) return;
-    if (sourceResponse.ok) {
-      const payload = (await sourceResponse.json()) as { data: DataSource[] };
-      if (signal.aborted) return;
-      setSources(payload.data);
-      const requestedSource = initialSourceId
-        ? payload.data.find((source) => source.id === initialSourceId)
-        : null;
-      setSelectedSourceIds((current) => {
-        if (initialSourceId) {
-          return requestedSource ? [requestedSource.id] : [];
-        }
-        return current.length
-          ? current
-          : payload.data.slice(0, 8).map((source) => source.id);
-      });
-      if (initialSourceId && !requestedSource) {
-        setError("This connector is unavailable or not ready yet.");
-      }
-    } else {
-      setError(
-        await apiMessage(sourceResponse, "Data sources are unavailable."),
+      const sourceResponse = await fetch(
+        "/api/data-sources?status=ready&limit=100",
+        { cache: "no-store", signal },
       );
-    }
-  }, [initialSessionId, initialSourceId]);
+      if (signal.aborted) return;
+      if (sourceResponse.ok) {
+        const payload = (await sourceResponse.json()) as { data: DataSource[] };
+        if (signal.aborted) return;
+        setSources(payload.data);
+        const requestedSource = initialSourceId
+          ? payload.data.find((source) => source.id === initialSourceId)
+          : null;
+        setSelectedSourceIds((current) => {
+          if (initialSourceId) {
+            return requestedSource ? [requestedSource.id] : [];
+          }
+          return current.length
+            ? current
+            : payload.data.slice(0, 8).map((source) => source.id);
+        });
+        if (initialSourceId && !requestedSource) {
+          setError("This connector is unavailable or not ready yet.");
+        }
+      } else {
+        setError(
+          await apiMessage(sourceResponse, "Data sources are unavailable."),
+        );
+      }
+    },
+    [initialSessionId, initialSourceId],
+  );
 
   const refreshPlan = useCallback(async (sessionId: string) => {
     const response = await fetch(`/api/chat/sessions/${sessionId}/plan`, {
@@ -1016,6 +1024,24 @@ export function ChatWorkspace({
         }),
       );
       setTurns(loaded);
+      const firstMessage = loaded
+        .find((turn) => turn.userMessage)
+        ?.userMessage?.replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
+      if (firstMessage) {
+        localStorage.setItem(
+          `forty-two-session-title:${initialSessionId}`,
+          firstMessage,
+        );
+        window.dispatchEvent(new Event("forty-two:sessions-changed"));
+        void fetch(`/api/chat/sessions/${initialSessionId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: firstMessage }),
+          signal: controller.signal,
+        });
+      }
       loaded
         .filter((turn) => turn.running)
         .forEach((turn) => openStream(initialSessionId, turn.id));
