@@ -100,17 +100,18 @@ export function FortyTwoApplicationShell({
       controller?.abort();
       controller = new AbortController();
       try {
-        const response = await fetch("/api/chat/sessions?limit=25", {
+        const response = await fetch(
+          "/api/chat/sessions?limit=25&status=active",
+          {
           cache: "no-store",
           signal: controller.signal,
-        });
+          },
+        );
         if (!response.ok) return;
         const payload = (await response.json()) as {
           data: SessionSummary[];
         };
-        setSessions(
-          payload.data.filter((session) => session.status === "active"),
-        );
+        setSessions(payload.data);
       } catch {
         // Keep the last successful sidebar state when refresh fails.
       }
