@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createBlobUploadAuthorization,
   deleteBlobClientIfMatch,
+  mergeManagedCorsRules,
 } from "./azure-storage";
 import type { FileDataSourceServerConfig } from "./config";
 import { CSV_MIME_TYPE } from "./file-validation";
@@ -77,4 +78,28 @@ test("conditional deletion pins the exact ETag and treats a missing blob idempot
       deleteSnapshots: "include",
     },
   ]);
+});
+
+test("managed CORS updates preserve unrelated wildcard rules", () => {
+  const wildcardRule = {
+    allowedOrigins: "https://*.other.example",
+    allowedMethods: "GET,OPTIONS",
+    allowedHeaders: "*",
+    exposedHeaders: "etag",
+    maxAgeInSeconds: 600,
+  };
+  const oldManagedRule = {
+    allowedOrigins: "https://old.example",
+    allowedMethods: "PUT,OPTIONS",
+    allowedHeaders:
+      "content-type,if-none-match,x-ms-blob-content-type,x-ms-blob-type,x-ms-client-request-id,x-ms-version",
+    exposedHeaders: "etag,x-ms-request-id,x-ms-version",
+    maxAgeInSeconds: 3_600,
+  };
+  const desiredRule = { ...oldManagedRule, allowedOrigins: "https://new.example" };
+
+  assert.deepEqual(
+    mergeManagedCorsRules([wildcardRule, oldManagedRule], desiredRule),
+    [wildcardRule, desiredRule],
+  );
 });

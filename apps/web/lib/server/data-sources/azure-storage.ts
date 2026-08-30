@@ -80,6 +80,19 @@ function isManagedCorsRule(rule: CorsRule): boolean {
   );
 }
 
+export function mergeManagedCorsRules(
+  currentRules: readonly CorsRule[],
+  desiredRule: CorsRule,
+): CorsRule[] {
+  const unrelatedRules = currentRules.filter((rule) => !isManagedCorsRule(rule));
+  if (unrelatedRules.length >= 5) {
+    throw new Error(
+      "Azure Blob Storage already has five unrelated CORS rules; no managed rule can be added safely.",
+    );
+  }
+  return [...unrelatedRules, desiredRule];
+}
+
 async function configureCorsAndContainer(
   config: FileDataSourceServerConfig,
 ): Promise<void> {
@@ -95,26 +108,9 @@ async function configureCorsAndContainer(
   const properties = await service.getProperties();
   const currentRules = properties.cors ?? [];
   const managedRule = currentRules.find(isManagedCorsRule);
-  const unsafeWildcardRules = currentRules.filter((rule) =>
-    rule.allowedOrigins
-      .split(",")
-      .some((origin) => origin.trim().includes("*")),
-  );
-  if (
-    !managedRule ||
-    !corsRuleEquals(managedRule, desiredRule) ||
-    unsafeWildcardRules.length > 0
-  ) {
-    const unrelatedRules = currentRules.filter(
-      (rule) => !isManagedCorsRule(rule) && !unsafeWildcardRules.includes(rule),
-    );
-    if (unrelatedRules.length >= 5) {
-      throw new Error(
-        "Azure Blob Storage already has five unrelated CORS rules; no managed rule can be added safely.",
-      );
-    }
+  if (!managedRule || !corsRuleEquals(managedRule, desiredRule)) {
     await service.setProperties({
-      cors: [...unrelatedRules, desiredRule],
+      cors: mergeManagedCorsRules(currentRules, desiredRule),
     });
   }
 
