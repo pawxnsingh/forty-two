@@ -421,10 +421,21 @@ function ArtifactCard({
 
   async function download() {
     if (!capability) return;
-    const response = await fetch(
+    let activeCapability = capability;
+    let response = await fetch(
       `/api/chat/sessions/${sessionId}/artifacts/${artifactId}/download`,
-      { headers: { authorization: `Bearer ${capability}` } },
+      { headers: { authorization: `Bearer ${activeCapability}` } },
     );
+    if (response.status === 404) {
+      const renewed = await onCapabilityExpired(activeCapability);
+      if (renewed) {
+        activeCapability = renewed;
+        response = await fetch(
+          `/api/chat/sessions/${sessionId}/artifacts/${artifactId}/download`,
+          { headers: { authorization: `Bearer ${activeCapability}` } },
+        );
+      }
+    }
     if (!response.ok) {
       setError(await apiMessage(response, "Download failed."));
       return;
