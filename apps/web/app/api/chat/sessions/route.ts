@@ -14,9 +14,8 @@ export async function GET(request: Request): Promise<Response> {
     const limit = parseLimit(search.get("limit"));
     const offset = parsePageToken(search.get("pageToken"));
     const rawStatus = search.get("status");
-    const status = rawStatus
-      ? ChatSessionStatusSchema.safeParse(rawStatus)
-      : null;
+    const status =
+      rawStatus === null ? null : ChatSessionStatusSchema.safeParse(rawStatus);
     if (status && !status.success) {
       throw new ApiInputError("status is invalid.");
     }
