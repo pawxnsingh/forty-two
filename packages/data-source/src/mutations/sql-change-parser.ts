@@ -82,10 +82,45 @@ function canonicalizeSource(sql: string): string {
   if (!trimmed || trimmed.length > 100_000) {
     throw new Error("SQL change must contain one bounded statement.");
   }
-  if (trimmed.includes(";") || /--|\/\*|\*\/|\/\//.test(trimmed)) {
-    throw new Error("Comments and multiple SQL statements are not supported.");
-  }
+  assertNoCommentsOrStatementSeparators(trimmed);
   return trimmed;
+}
+
+function assertNoCommentsOrStatementSeparators(source: string): void {
+  let quote: "'" | '"' | "`" | "]" | undefined;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (quote) {
+      const closing = quote;
+      if (character !== closing) continue;
+      if (source[index + 1] === closing) {
+        index += 1;
+        continue;
+      }
+      quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "[") {
+      quote = "]";
+      continue;
+    }
+    const pair = source.slice(index, index + 2);
+    if (
+      character === ";" ||
+      pair === "--" ||
+      pair === "/*" ||
+      pair === "*/" ||
+      pair === "//"
+    ) {
+      throw new Error(
+        "Comments and multiple SQL statements are not supported.",
+      );
+    }
+  }
 }
 
 function parseLexical(sql: string): LexicalChange {

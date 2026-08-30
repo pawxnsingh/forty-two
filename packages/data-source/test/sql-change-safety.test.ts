@@ -56,6 +56,38 @@ test("parses one bounded row change for every supported dialect", () => {
   }
 });
 
+test("comment markers and separators are rejected only outside quoted tokens", () => {
+  for (const dialect of DIALECTS) {
+    for (const value of [
+      "https://example.com/path",
+      "a--b",
+      "a/*b*/c",
+      "first;second",
+    ]) {
+      const parsed = parseSqlChange(
+        `UPDATE inventory SET note = '${value}' WHERE id = 7`,
+        dialect,
+      );
+      assert.equal(parsed.assignments.note, value, `${dialect}: ${value}`);
+    }
+    for (const suffix of [
+      "; DELETE FROM inventory",
+      " -- comment",
+      " /* comment */",
+    ]) {
+      assert.throws(
+        () =>
+          parseSqlChange(
+            `UPDATE inventory SET note = 'safe' WHERE id = 7${suffix}`,
+            dialect,
+          ),
+        /Comments and multiple SQL statements/,
+        `${dialect}: ${suffix}`,
+      );
+    }
+  }
+});
+
 test("literal extraction ignores numeric-looking identifier fragments in every dialect", () => {
   for (const dialect of DIALECTS) {
     const tableDigits = parseSqlChange(

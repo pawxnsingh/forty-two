@@ -16,6 +16,24 @@ export interface ConnectionPolicy {
 export interface ConfiguredConnection extends DataSourceConfig {
   description?: string;
   policy: ConnectionPolicy;
+  mutation?: {
+    mode: "disabled" | "controlled";
+    connectorType:
+      | "postgresql"
+      | "mysql"
+      | "sqlserver"
+      | "snowflake"
+      | "bigquery"
+      | "redshift";
+    credentialRevision: number;
+    allowedCatalog: string | null;
+    allowedSchema: string | null;
+    allowedTargets: Array<{
+      catalog: string | null;
+      schema: string | null;
+      table: string;
+    }>;
+  };
 }
 
 export interface ServerConfig {
@@ -25,6 +43,21 @@ export interface ServerConfig {
   allowedOrigins: string[];
   shutdownTimeoutMs: number;
   connections: ConfiguredConnection[];
+  fileDownloads?: FileDownloadConfig;
+  dynamic?: {
+    controlDatabaseUrl: string;
+    encryptionKey: string;
+  };
+}
+
+export interface ProductServerConfig extends ServerConfig {
+  dynamic: NonNullable<ServerConfig["dynamic"]>;
+}
+
+export interface FileDownloadConfig {
+  accountName: string;
+  accountKey: string;
+  container: string;
 }
 
 interface RawConnection {
@@ -40,12 +73,14 @@ interface RawConnection {
 
 export function loadServerConfig(
   environment: NodeJS.ProcessEnv = process.env,
-): ServerConfig {
+): ProductServerConfig {
   const authToken = environment.MCP_AUTH_TOKEN?.trim();
   if (!authToken) {
     throw new Error("MCP_AUTH_TOKEN is required");
   }
 
+  const dynamic = resolveDynamicConfiguration(environment);
+  const fileDownloads = resolveFileDownloadConfiguration(environment);
   return {
     host: environment.HOST?.trim() || "0.0.0.0",
     port: parsePositiveInteger(environment.PORT, DEFAULT_PORT, "PORT"),
@@ -60,45 +95,51 @@ export function loadServerConfig(
       20_000,
       "SHUTDOWN_TIMEOUT_MS",
     ),
-    connections: resolveConnections(environment),
+    // Product traffic is authorized by persisted session bindings. Static
+    // adapters remain injectable directly into ConnectionRegistry for isolated
+    // tests, but are never loaded into the product server.
+    connections: [],
+    ...(fileDownloads ? { fileDownloads } : {}),
+    dynamic,
   };
 }
 
-function resolveConnections(
+function resolveFileDownloadConfiguration(
   environment: NodeJS.ProcessEnv,
-): ConfiguredConnection[] {
-  if (environment.DATA_SOURCE_CONNECTIONS_JSON?.trim()) {
-    return parseConnections(environment.DATA_SOURCE_CONNECTIONS_JSON);
+): FileDownloadConfig | undefined {
+  const accountName = environment.AZURE_STORAGE_ACCOUNT_NAME?.trim();
+  const accountKey = environment.AZURE_STORAGE_ACCOUNT_KEY?.trim();
+  const container = environment.AZURE_STORAGE_CONTAINER?.trim();
+  if (!accountName && !accountKey && !container) return undefined;
+  if (!accountName || !accountKey || !container) {
+    throw new Error(
+      "AZURE_STORAGE_ACCOUNT_NAME, AZURE_STORAGE_ACCOUNT_KEY, and AZURE_STORAGE_CONTAINER are all required for scoped file downloads",
+    );
   }
+  if (!/^[a-z0-9]{3,24}$/.test(accountName)) {
+    throw new Error("AZURE_STORAGE_ACCOUNT_NAME is invalid");
+  }
+  if (
+    !/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/.test(container) ||
+    container.includes("--")
+  ) {
+    throw new Error("AZURE_STORAGE_CONTAINER is invalid");
+  }
+  return { accountName, accountKey, container };
+}
 
-  const password = environment.PLATFORM_POSTGRES_PASSWORD?.trim();
-  if (!password) return [];
-  const database =
-    environment.PLATFORM_POSTGRES_DATABASE?.trim() || "forty_two";
-  const username =
-    environment.PLATFORM_POSTGRES_USER?.trim() || "forty_two_reader";
-  const port = parsePositiveInteger(
-    environment.PLATFORM_POSTGRES_PORT,
-    5432,
-    "PLATFORM_POSTGRES_PORT",
-  );
-  return [
-    {
-      name: "local-postgres",
-      description: "Forty Two platform database",
-      type: DataSourceType.PostgreSQL,
-      credentials: {
-        type: DataSourceType.PostgreSQL,
-        host: environment.PLATFORM_POSTGRES_HOST?.trim() || "postgres",
-        port,
-        default_database: database,
-        username,
-        password,
-        ssl: false,
-      },
-      policy: { maxRows: 1_000, queryTimeoutMs: 60_000 },
-    },
-  ];
+function resolveDynamicConfiguration(
+  environment: NodeJS.ProcessEnv,
+): NonNullable<ServerConfig["dynamic"]> {
+  const controlDatabaseUrl = environment.MCP_CONTROL_DATABASE_URL?.trim();
+  const encryptionKey =
+    environment.DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY?.trim();
+  if (!controlDatabaseUrl || !encryptionKey) {
+    throw new Error(
+      "MCP_CONTROL_DATABASE_URL and DATA_SOURCE_CREDENTIALS_ENCRYPTION_KEY are required for session authorization and dynamic datasources",
+    );
+  }
+  return { controlDatabaseUrl, encryptionKey };
 }
 
 export function parseAllowedOrigins(value: string | undefined): string[] {

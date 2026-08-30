@@ -106,6 +106,31 @@ export function createHttpApp(
     },
   );
 
+  app.post(
+    "/internal/data-sources/:dataSourceId/validate",
+    rejectWhileDraining(lifecycle),
+    requireBearerToken(config.authToken),
+    async (request, response) => {
+      await lifecycle.track(async () => {
+        const dataSourceId = request.params.dataSourceId;
+        if (typeof dataSourceId !== "string") {
+          response.status(404).json({ error: "Datasource not found" });
+          return;
+        }
+
+        let connected = false;
+        try {
+          await registry.resolveTesting(dataSourceId);
+          connected = await registry.dataSource.testDataSource(dataSourceId);
+        } catch {
+          connected = false;
+        }
+        if (!connected) await registry.invalidateDynamic(dataSourceId);
+        response.json({ data: { dataSourceId, connected } });
+      });
+    },
+  );
+
   app.use("/mcp", requireAllowedOrigin(config.allowedOrigins));
   app.use("/mcp", rejectWhileDraining(lifecycle));
   app.use("/mcp", requireBearerToken(config.authToken));

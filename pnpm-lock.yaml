@@ -23,6 +23,9 @@ importers:
       '@forty-two/data-source':
         specifier: workspace:*
         version: link:../../packages/data-source
+      '@forty-two/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)

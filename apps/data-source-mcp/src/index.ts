@@ -1,19 +1,26 @@
 import { createServer } from "node:http";
 
+import { closeDatabase, initializeDatabase } from "@forty-two/db";
+
 import { loadServerConfig } from "./config.js";
 import { ConnectionRegistry } from "./connection-registry.js";
 import { createHttpApp, HttpRequestLifecycle } from "./http-server.js";
+import { createDynamicConnectionStore } from "./dynamic-store.js";
 import { drainAndClose } from "./shutdown.js";
 
 const config = loadServerConfig();
-const registry = new ConnectionRegistry(config.connections);
+initializeDatabase({ connectionString: config.dynamic.controlDatabaseUrl });
+const registry = new ConnectionRegistry(config.connections, {
+  encryptionKey: config.dynamic.encryptionKey,
+  store: createDynamicConnectionStore(),
+});
 const lifecycle = new HttpRequestLifecycle();
 const app = createHttpApp(config, registry, lifecycle);
 const httpServer = createServer(app);
 
 httpServer.listen(config.port, config.host, () => {
   console.log(
-    `Forty Two data-source MCP listening on http://${config.host}:${config.port}/mcp with ${config.connections.length} configured connection(s)`,
+    `Forty Two data-source MCP listening on http://${config.host}:${config.port}/mcp with dynamic datasource resolution enabled`,
   );
 });
 
@@ -29,6 +36,7 @@ async function shutdown(signal: string): Promise<void> {
     registry,
     timeoutMs: config.shutdownTimeoutMs,
   });
+  await closeDatabase();
   console.log("Data-source MCP shutdown complete");
 }
 
