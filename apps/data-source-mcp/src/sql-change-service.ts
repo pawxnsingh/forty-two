@@ -552,17 +552,21 @@ export function requireAllowedTarget(
     Awaited<ReturnType<ConnectionRegistry["get"]>>["mutation"]
   >,
 ): { catalog: string | null; schema: string | null; table: string } {
-  const quotedTarget = Boolean(target.sql && /["`\[\]]/.test(target.sql));
-  const matches = (allowed: string | null, requested: string | null) =>
+  const quoted = qualifiedTargetQuoteFlags(target.sql);
+  const matches = (
+    allowed: string | null,
+    requested: string | null,
+    isQuoted: boolean,
+  ) =>
     requested === null ||
-    (quotedTarget
+    (isQuoted
       ? allowed === requested
       : allowed?.toLowerCase() === requested.toLowerCase());
   const candidates = mutation.allowedTargets.filter(
     (candidate) =>
-      matches(candidate.table, target.table) &&
-      matches(candidate.catalog, target.catalog) &&
-      matches(candidate.schema, target.schema),
+      matches(candidate.table, target.table, quoted.table) &&
+      matches(candidate.catalog, target.catalog, quoted.catalog) &&
+      matches(candidate.schema, target.schema, quoted.schema),
   );
   if (candidates.length !== 1) {
     throw new Error(
@@ -576,6 +580,49 @@ export function requireAllowedTarget(
     );
   }
   return allowed;
+}
+
+function qualifiedTargetQuoteFlags(sql: string | undefined): {
+  catalog: boolean;
+  schema: boolean;
+  table: boolean;
+} {
+  if (!sql) return { catalog: false, schema: false, table: false };
+  const parts: string[] = [];
+  let part = "";
+  let closingQuote: '"' | "`" | "]" | undefined;
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql[index]!;
+    if (closingQuote) {
+      part += character;
+      if (character === closingQuote) {
+        if (sql[index + 1] === closingQuote) {
+          part += sql[++index]!;
+        } else {
+          closingQuote = undefined;
+        }
+      }
+      continue;
+    }
+    if (character === '"' || character === "`" || character === "[") {
+      closingQuote = character === "[" ? "]" : character;
+      part += character;
+      continue;
+    }
+    if (character === ".") {
+      parts.push(part.trim());
+      part = "";
+      continue;
+    }
+    part += character;
+  }
+  parts.push(part.trim());
+  const flags = parts.map((value) => /^["`\[]/.test(value));
+  return parts.length === 3
+    ? { catalog: flags[0]!, schema: flags[1]!, table: flags[2]! }
+    : parts.length === 2
+      ? { catalog: false, schema: flags[0]!, table: flags[1]! }
+      : { catalog: false, schema: false, table: flags[0] ?? false };
 }
 
 function rowPreconditions(value: Record<string, unknown>): {

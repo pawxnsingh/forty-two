@@ -269,6 +269,18 @@ test("quoted row targets cannot alias an unquoted allowlist entry", () => {
     schema: "public",
     table: "users",
   });
+  const mixed = normalizeSqlChangeTarget(
+    parseSqlChange(
+      'UPDATE PUBLIC."users" SET enabled = TRUE WHERE id = 1',
+      "postgresql",
+    ).target,
+    "postgresql",
+  );
+  assert.deepEqual(requireAllowedTarget(mixed, mutation), {
+    catalog: null,
+    schema: "public",
+    table: "users",
+  });
   assert.deepEqual(
     requireAllowedTarget(
       normalizeSqlChangeTarget(
