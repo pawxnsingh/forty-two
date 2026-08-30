@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/create-next-app).
+# Forty Two web
 
-## Getting Started
+The web application is Forty Two's public product surface and server-side
+gateway. It contains the connector marketplace, datasource setup flows,
+conversation UI, execution and plan presentation, approval controls, and table
+and chart artifact rendering.
 
-First, run the development server:
+The browser never talks directly to TrueForge, either MCP service, Daytona,
+PostgreSQL, or Azure Blob Storage. Server routes in this app enforce the public
+API contract and keep control-plane credentials private.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Run from the workspace
+
+Install dependencies from the repository root:
+
+```sh
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Start only the web development server on port 3000:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```sh
+pnpm --filter web dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load Inter, a custom Google Font.
+The full product requires the Compose services and root `.env` configuration.
+Follow the root [`README.md`](../../README.md) for a working end-to-end stack.
 
-## Learn More
+## Routes
 
-To learn more about Next.js, take a look at the following resources:
+- `/connectors` — list, inspect, start a session from, or remove datasources
+- `/connectors/new` — connector marketplace
+- `/connectors/new/[type]` — file or database connector setup
+- `/chat` — create a new datasource-bound session
+- `/chat/[sessionId]` — durable conversation, execution, plan, and artifacts
+- `/api/data-sources/*` — server-side datasource lifecycle APIs
+- `/api/chat/sessions/*` — session, turn, approval, event, and artifact APIs
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Commands
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Run these from the repository root:
 
-## Deploy on Vercel
+```sh
+pnpm --filter web check-types
+pnpm --filter web lint
+pnpm --filter web build
+pnpm --filter web test
+pnpm --filter web test:chat-client
+pnpm --filter web test:turn-events
+pnpm --filter web test:artifacts
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The production image is built by the root Compose stack. It runs the optimized
+Next.js standalone server rather than a development server. The app uses Google
+Sans Flex through `next/font` together with the shared Forty Two design-token
+font stacks.

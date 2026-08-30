@@ -39,20 +39,20 @@ flowchart LR
 
 ## Repository map
 
-| Path | Responsibility |
-| --- | --- |
-| `apps/web` | Product UI, public gateway APIs, SSE, artifact presentation |
-| `apps/data-source-mcp` | Authenticated datasource, SQL, file and artifact MCP tools |
-| `apps/todo-mcp` | Durable session-plan MCP tools |
-| `packages/db` | Database schema, repositories, capabilities and audit state |
-| `packages/data-source` | Connector adapters and SQL safety policy |
-| `packages/artifacts` | Canonical table payload and helper contracts |
-| `packages/charting` | Seven chart renderers and interactive ChartCard |
-| `packages/design-tokens` | Semantic visual tokens and governed fonts |
-| `packages/ui-web` | Accessible web primitives |
-| `packages/app-shell` | Responsive application shell |
-| `docker/trueforge` | Hosted-mode TrueForge image |
-| `docker/sandbox` | Immutable Daytona analysis image |
+| Path                     | Responsibility                                              |
+| ------------------------ | ----------------------------------------------------------- |
+| `apps/web`               | Product UI, public gateway APIs, SSE, artifact presentation |
+| `apps/data-source-mcp`   | Authenticated datasource, SQL, file and artifact MCP tools  |
+| `apps/todo-mcp`          | Durable session-plan MCP tools                              |
+| `packages/db`            | Database schema, repositories, capabilities and audit state |
+| `packages/data-source`   | Connector adapters and SQL safety policy                    |
+| `packages/artifacts`     | Canonical table payload and helper contracts                |
+| `packages/charting`      | Seven chart renderers and interactive ChartCard             |
+| `packages/design-tokens` | Semantic visual tokens and governed fonts                   |
+| `packages/ui-web`        | Accessible web primitives                                   |
+| `packages/app-shell`     | Responsive application shell                                |
+| `docker/trueforge`       | Hosted-mode TrueForge image                                 |
+| `docker/sandbox`         | Immutable Daytona analysis image                            |
 
 ## Run locally
 
@@ -129,6 +129,32 @@ docker compose ps
 
 Open [http://localhost:3000](http://localhost:3000). The web container runs a prebuilt production Next.js standalone server. TrueForge and both MCP services are internal-only; the public web port is loopback-bound by default.
 
+The default Compose project also includes MySQL and SQL Server containers for
+local connector and integration testing. They are not required for a reduced
+PostgreSQL-backed product deployment. To start the reduced service set used by
+the hosted demo, name the services explicitly:
+
+```sh
+docker compose up -d --build \
+  postgres database-migrate postgres-readonly-init \
+  redis data-source-mcp todo-mcp trueforge trueforge-bootstrap web
+```
+
+`trueforge-bootstrap` is a required one-shot service. A healthy `trueforge`
+container is not enough: bootstrap must exit successfully before the web
+service can serve working sessions. Inspect it with:
+
+```sh
+docker compose ps -a trueforge-bootstrap
+docker compose logs trueforge-bootstrap
+```
+
+The current hosted deployment uses an already-created Daytona snapshot pinned
+by its snapshot ID. A fresh Daytona account must successfully create or resolve
+the snapshot referenced by `PLATFORM_SANDBOX_IMAGE_URI`; if bootstrap cannot do
+that, the deployment is not complete and should not be bypassed by starting the
+web container alone.
+
 Stop without deleting persisted data:
 
 ```sh
@@ -179,16 +205,24 @@ The live suites verify datasource isolation, browser contract replay, plans, app
 
 ## Qodo Code Review Evidence
 
-Every substantive implementation layer is submitted through a Qodo-reviewed pull request. The review thread, findings, remediation commits, and follow-up review remain attached to each PR.
+The implementation stack through PR #14 was submitted through Qodo-reviewed
+pull requests. The review threads, findings, remediation commits, and follow-up
+reviews remain attached to those PRs.
 
 - Backend foundation: [PR #2](https://github.com/pawxnsingh/forty-two/pull/2) through [PR #11](https://github.com/pawxnsingh/forty-two/pull/11)
 - Interface and connectors: [PR #12](https://github.com/pawxnsingh/forty-two/pull/12)
 - Conversational analytics and visualization: [PR #13](https://github.com/pawxnsingh/forty-two/pull/13)
 - Production and submission readiness: [PR #14](https://github.com/pawxnsingh/forty-two/pull/14)
 
-Qodo review is requested with `/agentic_review` on every PR and rerun after remediation so the latest commit retains visible review evidence.
+Qodo review was requested with `/agentic_review` on those PRs and rerun after
+remediation. Commits made directly on `main` after PR #14 are not covered by the
+PR evidence above; consult the current Git history when evaluating exact-revision
+review coverage.
 
 ## Demo
+
+- Live product: [https://agentharness.duckdns.org](https://agentharness.duckdns.org)
+- Demo video: pending publication
 
 Recommended judge flow:
 
@@ -200,7 +234,8 @@ Recommended judge flow:
 6. Reload the page to demonstrate session, plan, and artifact restoration.
 7. Demonstrate a controlled SQL change and deny or approve it from the scoped approval card.
 
-The final public demo-video link must be added here before the submission form is sent.
+Replace the pending demo-video entry with the final public recording before the
+submission form is sent.
 
 ## AI-assisted development disclosure
 

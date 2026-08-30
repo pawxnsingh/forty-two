@@ -1,3 +1,3 @@
-# `@turbo/eslint-config`
+# `@repo/eslint-config`
 
-Collection of internal eslint configurations.
+Shared internal ESLint configurations for the Forty Two workspace.
