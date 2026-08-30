@@ -137,7 +137,7 @@ describe("Azure artifact upload descriptors", () => {
     );
   });
 
-  it("paginates past an ineligible first page and treats limit as a deletion budget", async () => {
+  it("bounds each orphan scan page and resumes from its continuation token", async () => {
     const deleted: string[] = [];
     const old = new Date("2026-08-20T00:00:00.000Z");
     const recent = new Date("2026-08-28T00:00:00.000Z");
@@ -145,15 +145,22 @@ describe("Azure artifact upload descriptors", () => {
       listBlobsFlat() {
         return {
           async *[Symbol.asyncIterator]() {},
-          async *byPage() {
-            yield {
-              segment: {
-                blobItems: Array.from({ length: 100 }, (_, index) => ({
-                  name: `artifacts/recent-${index}`,
-                  properties: { lastModified: recent },
-                })),
-              },
-            };
+          async *byPage(input?: { continuationToken?: string }) {
+            if (!input?.continuationToken) {
+              yield {
+                continuationToken: "second-page",
+                segment: {
+                  blobItems: [
+                    {
+                      name: "artifacts/recent",
+                      properties: { lastModified: recent },
+                    },
+                  ],
+                },
+              };
+              return;
+            }
+            assert.equal(input.continuationToken, "second-page");
             yield {
               segment: {
                 blobItems: [
@@ -201,13 +208,12 @@ describe("Azure artifact upload descriptors", () => {
       service,
       { analysisArtifactBlobExists: async () => false },
     );
-    assert.equal(
-      await pagedStore.cleanupOrphanUploads({
-        olderThan: new Date("2026-08-27T00:00:00.000Z"),
-        limit: 1,
-      }),
-      1,
-    );
+    const cleanupInput = {
+      olderThan: new Date("2026-08-27T00:00:00.000Z"),
+      limit: 1,
+    };
+    assert.equal(await pagedStore.cleanupOrphanUploads(cleanupInput), 0);
+    assert.equal(await pagedStore.cleanupOrphanUploads(cleanupInput), 1);
     assert.deepEqual(deleted, ["artifacts/old-orphan"]);
   });
 

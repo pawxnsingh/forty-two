@@ -96,8 +96,10 @@ services:
   trueforge:
     image: forty-two-trueforge:local
     build:
-      context: ./vendor/trueforge
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: docker/trueforge/Dockerfile
+      args:
+        PLATFORM_SANDBOX_IMAGE_URI: ${PLATFORM_SANDBOX_IMAGE_URI:?Set PLATFORM_SANDBOX_IMAGE_URI to an immutable registry digest}
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0

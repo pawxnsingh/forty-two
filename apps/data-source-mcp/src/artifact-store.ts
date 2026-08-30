@@ -415,6 +415,7 @@ function validatedInputShape(input: unknown, parsed: unknown): unknown {
 }
 
 export class ArtifactStore {
+  private orphanCleanupContinuationToken: string | undefined;
   private readonly credential: StorageSharedKeyCredential;
   private readonly service: BlobServiceClient;
   private readonly repositories: typeof defaultRepositories;
@@ -996,116 +997,121 @@ export class ArtifactStore {
     let deleted = 0;
     const pages = this.container()
       .listBlobsFlat({ prefix: "artifacts/" })
-      .byPage({ maxPageSize: Math.min(limit, 100) });
-    for await (const page of pages) {
-      for (const listed of page.segment.blobItems) {
-        if (deleted >= limit) return deleted;
+      .byPage({
+        continuationToken: this.orphanCleanupContinuationToken,
+        maxPageSize: Math.min(limit, 100),
+      });
+    const page = await pages[Symbol.asyncIterator]().next();
+    if (page.done) {
+      this.orphanCleanupContinuationToken = undefined;
+      return deleted;
+    }
+    this.orphanCleanupContinuationToken =
+      page.value.continuationToken || undefined;
+    for (const listed of page.value.segment.blobItems.slice(0, limit)) {
+      if (
+        !listed.properties.lastModified ||
+        listed.properties.lastModified >= olderThan
+      ) {
+        continue;
+      }
+      const blob = this.container().getBlobClient(listed.name);
+      let lease = new RenewingBlobLease(blob.getBlobLeaseClient());
+      let deletedBlob = false;
+      let staleLeaseETag: string | undefined;
+      let recoveredStaleLease = false;
+      try {
+        await lease.acquire();
+      } catch (error) {
+        if (!isAzureStatus(error, 409, 412)) throw error;
+        let properties;
+        try {
+          properties = await blob.getProperties();
+        } catch (propertiesError) {
+          if (isAzureStatus(propertiesError, 404)) continue;
+          throw propertiesError;
+        }
         if (
-          !listed.properties.lastModified ||
-          listed.properties.lastModified >= olderThan
+          !hasStaleInfiniteFinalizationLease(
+            properties,
+            staleFinalizationBefore,
+          ) ||
+          properties.etag === undefined
         ) {
           continue;
         }
-        const blob = this.container().getBlobClient(listed.name);
-        let lease = new RenewingBlobLease(blob.getBlobLeaseClient());
-        let deletedBlob = false;
-        let staleLeaseETag: string | undefined;
-        let recoveredStaleLease = false;
+        staleLeaseETag = properties.etag;
+        const artifactId = artifactIdFromBlobName(listed.name);
+        const exactCommittedBinding =
+          artifactId !== null &&
+          (await this.repositories.analysisArtifactBlobBindingExists({
+            artifactId,
+            azureBlobName: listed.name,
+            azureETag: staleLeaseETag,
+          }));
+        if (
+          !exactCommittedBinding &&
+          (await this.repositories.analysisArtifactBlobExists(listed.name))
+        ) {
+          continue;
+        }
+        try {
+          await blob.getBlobLeaseClient().breakLease(0, {
+            conditions: { ifMatch: staleLeaseETag },
+          });
+        } catch (breakError) {
+          if (isAzureStatus(breakError, 409, 412)) continue;
+          throw breakError;
+        }
+        lease = new RenewingBlobLease(blob.getBlobLeaseClient());
         try {
           await lease.acquire();
-        } catch (error) {
-          if (!isAzureStatus(error, 409, 412)) throw error;
-          let properties;
-          try {
-            properties = await blob.getProperties();
-          } catch (propertiesError) {
-            if (isAzureStatus(propertiesError, 404)) continue;
-            throw propertiesError;
-          }
-          if (
-            !hasStaleInfiniteFinalizationLease(
-              properties,
-              staleFinalizationBefore,
-            ) ||
-            properties.etag === undefined
-          ) {
-            continue;
-          }
-          staleLeaseETag = properties.etag;
+          recoveredStaleLease = true;
+        } catch (reacquireError) {
+          if (isAzureStatus(reacquireError, 409, 412)) continue;
+          throw reacquireError;
+        }
+      }
+      try {
+        const properties = await blob.getProperties({
+          conditions: {
+            leaseId: lease.leaseId,
+            ...(staleLeaseETag ? { ifMatch: staleLeaseETag } : {}),
+          },
+        });
+        if (hasRecentFinalizationMarker(properties, staleFinalizationBefore)) {
+          continue;
+        }
+        if (recoveredStaleLease) {
           const artifactId = artifactIdFromBlobName(listed.name);
           const exactCommittedBinding =
             artifactId !== null &&
+            properties.etag !== undefined &&
             (await this.repositories.analysisArtifactBlobBindingExists({
               artifactId,
               azureBlobName: listed.name,
-              azureETag: staleLeaseETag,
+              azureETag: properties.etag,
             }));
-          if (
-            !exactCommittedBinding &&
-            (await this.repositories.analysisArtifactBlobExists(listed.name))
-          ) {
+          // Releasing the cleanup lease in finally restores ordinary reads;
+          // committed bytes are retained until the next retention pass.
+          if (exactCommittedBinding) continue;
+          if (await this.repositories.analysisArtifactBlobExists(listed.name))
             continue;
-          }
-          try {
-            await blob.getBlobLeaseClient().breakLease(0, {
-              conditions: { ifMatch: staleLeaseETag },
-            });
-          } catch (breakError) {
-            if (isAzureStatus(breakError, 409, 412)) continue;
-            throw breakError;
-          }
-          lease = new RenewingBlobLease(blob.getBlobLeaseClient());
-          try {
-            await lease.acquire();
-            recoveredStaleLease = true;
-          } catch (reacquireError) {
-            if (isAzureStatus(reacquireError, 409, 412)) continue;
-            throw reacquireError;
-          }
+        } else if (
+          await this.repositories.analysisArtifactBlobExists(listed.name)
+        ) {
+          continue;
         }
-        try {
-          const properties = await blob.getProperties({
-            conditions: {
-              leaseId: lease.leaseId,
-              ...(staleLeaseETag ? { ifMatch: staleLeaseETag } : {}),
-            },
-          });
-          if (
-            hasRecentFinalizationMarker(properties, staleFinalizationBefore)
-          ) {
-            continue;
-          }
-          if (recoveredStaleLease) {
-            const artifactId = artifactIdFromBlobName(listed.name);
-            const exactCommittedBinding =
-              artifactId !== null &&
-              properties.etag !== undefined &&
-              (await this.repositories.analysisArtifactBlobBindingExists({
-                artifactId,
-                azureBlobName: listed.name,
-                azureETag: properties.etag,
-              }));
-            // Releasing the cleanup lease in finally restores ordinary reads;
-            // committed bytes are retained until the next retention pass.
-            if (exactCommittedBinding) continue;
-            if (await this.repositories.analysisArtifactBlobExists(listed.name))
-              continue;
-          } else if (
-            await this.repositories.analysisArtifactBlobExists(listed.name)
-          ) {
-            continue;
-          }
-          await lease.renewNow();
-          await blob.delete({
-            deleteSnapshots: "include",
-            conditions: { leaseId: lease.leaseId },
-          });
-          deletedBlob = true;
-          lease.completeAfterDelete();
-          deleted += 1;
-        } finally {
-          if (!deletedBlob) await lease.release();
-        }
+        await lease.renewNow();
+        await blob.delete({
+          deleteSnapshots: "include",
+          conditions: { leaseId: lease.leaseId },
+        });
+        deletedBlob = true;
+        lease.completeAfterDelete();
+        deleted += 1;
+      } finally {
+        if (!deletedBlob) await lease.release();
       }
     }
     return deleted;
