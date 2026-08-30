@@ -12,6 +12,7 @@ import {
   ApiInputError,
   createApplicationTurn,
   createTrueForgeTurnOnce,
+  artifactWorkflowInstructions,
   createApplicationSession,
   deleteApplicationSession,
   deleteSessionResources,
@@ -48,6 +49,23 @@ function turnResponse(id: string) {
     ReturnType<ApplicationTurnDependencies["createTurn"]>
   >;
 }
+
+test("artifact workflow keeps committed query tables out of table finalization", () => {
+  const instructions = artifactWorkflowInstructions();
+  assert.match(
+    instructions,
+    /create_query_table_artifact performs the query, writes the artifact, commits its metadata/i,
+  );
+  assert.match(
+    instructions,
+    /NEVER call finalize_table_artifact for an artifact returned by create_query_table_artifact/,
+  );
+  assert.match(
+    instructions,
+    /Call finalize_table_artifact exactly once for that emit_table receipt/,
+  );
+  assert.match(instructions, /explicit error is not ambiguous/i);
+});
 
 const approvalInput = {
   changeSetId: "change_01HZX000000000000000000001",

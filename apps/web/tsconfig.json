@@ -1,6 +1,12 @@
 {
   "extends": "@repo/typescript-config/nextjs.json",
   "compilerOptions": {
+    "baseUrl": ".",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@viz/*": ["../../packages/charting/src/viz/*"]
+    },
+    "noUncheckedIndexedAccess": false,
     "plugins": [
       {
         "name": "next"
@@ -13,7 +19,8 @@
     "**/*.tsx",
     "next-env.d.ts",
     "next.config.js",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    "../../packages/charting/src/viz/components/ui/charts/ChartJS/types/index.d.ts"
   ],
   "exclude": ["node_modules"]
 }

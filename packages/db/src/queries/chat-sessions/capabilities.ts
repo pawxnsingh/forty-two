@@ -71,3 +71,37 @@ export async function revokeChatSessionCapability(
 
   return rows[0] ? parseChatSession(rows[0]) : null;
 }
+
+export const RotateChatSessionCapabilityInputSchema = z.object({
+  chatSessionId: ChatSessionIdSchema,
+  capabilityId: CapabilityIdSchema,
+  capabilityExpiresAt: z.date(),
+});
+
+export type RotateChatSessionCapabilityInput = z.input<
+  typeof RotateChatSessionCapabilityInputSchema
+>;
+
+export async function rotateChatSessionCapability(
+  input: RotateChatSessionCapabilityInput,
+): Promise<ChatSession | null> {
+  const parsed = RotateChatSessionCapabilityInputSchema.parse(input);
+  const rows = await getDatabase()
+    .update(chatSessions)
+    .set({
+      capabilityId: parsed.capabilityId,
+      capabilityExpiresAt: parsed.capabilityExpiresAt,
+      updatedAt: sql`CURRENT_TIMESTAMP`,
+    })
+    .where(
+      and(
+        eq(chatSessions.id, parsed.chatSessionId),
+        eq(chatSessions.status, "active"),
+        isNull(chatSessions.capabilityRevokedAt),
+        isNull(chatSessions.deletedAt),
+      ),
+    )
+    .returning();
+
+  return rows[0] ? parseChatSession(rows[0]) : null;
+}

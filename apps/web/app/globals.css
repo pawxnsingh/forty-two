@@ -6,6 +6,7 @@
 
 @source "../../../packages/ui-web/src";
 @source "../../../packages/app-shell/src";
+@source "../../../packages/charting/src";
 
 html,
 body {

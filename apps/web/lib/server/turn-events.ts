@@ -329,7 +329,8 @@ function normalizeToolResponse(
       summary: result.summary,
     },
   ];
-  const artifact = artifactReceipt(event.content, tool);
+  const artifact =
+    result.outcome === "success" ? artifactReceipt(event.content, tool) : null;
   if (artifact) {
     normalized.push({
       type: "artifact.created",
@@ -352,7 +353,7 @@ function safeToolResult(
   }
 
   const envelope = parseJson(content);
-  const failed = isRecord(envelope) && envelope.isError === true;
+  const failed = isToolErrorEnvelope(envelope);
   if (failed) return { outcome: "error", summary: "Did not complete" };
   if (
     tool?.metadata.kind === "system" &&
@@ -453,6 +454,27 @@ function topLevelBooleanField(source: string, field: string): boolean {
     }
   }
   return false;
+}
+
+function isToolErrorEnvelope(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.isError === true) return true;
+  if (
+    Object.hasOwn(value, "error") &&
+    value.error !== null &&
+    value.error !== undefined &&
+    value.error !== false
+  ) {
+    return true;
+  }
+  if (isToolErrorEnvelope(value.structuredContent)) return true;
+  if (!Array.isArray(value.content)) return false;
+  return value.content.some((block) => {
+    if (!isRecord(block)) return false;
+    if (isToolErrorEnvelope(block)) return true;
+    if (block.type !== "text" || typeof block.text !== "string") return false;
+    return isToolErrorEnvelope(parseJson(block.text));
+  });
 }
 
 function structuredToolResult(value: unknown): Record<string, unknown> {

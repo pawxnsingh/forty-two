@@ -137,7 +137,77 @@ describe("Azure artifact upload descriptors", () => {
     );
   });
 
-  it("bounds each orphan scan page and resumes from its continuation token", async () => {
+  it("treats finalization of a committed query artifact as an immutable no-op", async () => {
+    const chatSessionId = "sess_01HZX000000000000000000001";
+    const artifactId = "art_01ARZ3NDEKTSV4RRFFQ69G5FAA";
+    const contentSha256 = "a".repeat(64);
+    const existing = artifactFromCommit({
+      artifactId,
+      chatSessionId,
+      title: "Query result",
+      azureBlobName: `artifacts/${chatSessionId}/${artifactId}/table.v1.jsonl`,
+      azureETag: '"query-etag"',
+      contentSha256,
+      byteSize: 42,
+      rowCount: 1,
+      columns: [{ name: "value", type: "integer", nullable: false }],
+      preview: [{ value: 7 }],
+      sourceLimited: false,
+      sourceMaxRows: null,
+      provenance: {
+        tool: "create_query_table_artifact",
+        operationKey: "query:request-id",
+        dataSourceIds: ["ds_01HZX000000000000000000001"],
+        sourceReferences: ["datasource:ds_01HZX000000000000000000001"],
+        completedAt: "2026-08-30T00:00:00.000Z",
+      },
+    });
+    const queryStore = new ArtifactStore(
+      {
+        accountName: "dummy42account",
+        accountKey: Buffer.alloc(32, 42).toString("base64"),
+        container: "dummy42",
+      },
+      undefined,
+      {
+        getAnalysisArtifact: (async () => existing) as never,
+        listAnalysisArtifactParents: async () => {
+          throw new Error(
+            "query compatibility must not inspect upload lineage",
+          );
+        },
+      },
+    );
+
+    const result = await queryStore.finalizeTable({
+      chatSessionId,
+      request: {
+        artifactId,
+        contentSha256,
+        title: "A different title must not rewrite the query artifact",
+        parentArtifactIds: [],
+        sourceReferences: [],
+      },
+    });
+    assert.equal(result.artifactId, artifactId);
+    assert.equal(result.contentSha256, contentSha256);
+    assert.equal(result.rowCount, 1);
+
+    await assert.rejects(
+      queryStore.finalizeTable({
+        chatSessionId,
+        request: {
+          artifactId,
+          contentSha256: "b".repeat(64),
+          parentArtifactIds: [],
+          sourceReferences: [],
+        },
+      }),
+      /conflicts with the committed query artifact/,
+    );
+  });
+
+  it("paginates past an ineligible first page and treats limit as a deletion budget", async () => {
     const deleted: string[] = [];
     const old = new Date("2026-08-20T00:00:00.000Z");
     const recent = new Date("2026-08-28T00:00:00.000Z");

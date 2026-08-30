@@ -1,0 +1,30 @@
+import type { ChartType } from "@viz/metrics-schema";
+import type React from "react";
+import { LegendItemDot } from "../ChartLegend";
+
+export const TooltipTitle: React.FC<{
+  title:
+    | string
+    | { title: string; color: string | undefined; seriesType: string }
+    | undefined;
+}> = ({ title: titleProp }) => {
+  if (!titleProp) return null;
+
+  const isTitleString = typeof titleProp === "string";
+  const title = isTitleString ? titleProp : titleProp.title;
+  const color = isTitleString ? undefined : titleProp.color;
+  const seriesType = isTitleString ? undefined : titleProp.seriesType;
+
+  return (
+    <div className={"flex items-center space-x-1.5 border-b px-3 py-1.5"}>
+      {seriesType && (
+        <LegendItemDot
+          color={color}
+          type={seriesType as ChartType}
+          inactive={false}
+        />
+      )}
+      <span className="text-foreground text-body font-medium">{title}</span>
+    </div>
+  );
+};

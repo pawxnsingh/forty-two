@@ -1,0 +1,146 @@
+import { AnimatePresence, motion } from "framer-motion";
+import React, { useMemo, useRef } from "react";
+import { ErrorBoundary } from "react-error-boundary";
+import { useMemoizedFn } from "@viz/hooks/useMemoizedFn";
+import { computeHiddenShowItems } from "./helpers";
+import type { ChartLegendProps } from "./interfaces";
+import { LegendItem } from "./LegendItem";
+import { OverflowButton } from "./OverflowContainer";
+
+export const ChartLegend: React.FC<ChartLegendProps> = React.memo(
+  ({
+    legendItems,
+    onClickItem,
+    animateLegend,
+    containerWidth = 400,
+    showLegendHeadline,
+    onFocusItem,
+    onHoverItem,
+    show,
+  }) => {
+    const legendWidth = containerWidth;
+    const completedInitialAnimation = useRef(false);
+
+    const { shownItems, hiddenItems } = useMemo(() => {
+      if (!show || !legendItems || legendItems.length === 0) {
+        return { shownItems: [], hiddenItems: [] };
+      }
+
+      const { shownItems, hiddenItems } = computeHiddenShowItems(
+        legendItems,
+        legendWidth,
+      );
+
+      return { shownItems, hiddenItems };
+    }, [legendItems, legendWidth, show]);
+
+    const legendKey = useMemo(() => {
+      return legendItems.map((item) => item.id).join("");
+    }, [legendItems]);
+
+    const hasOverflowButtons = hiddenItems.length > 0;
+    const showLegend = show && (shownItems.length >= 1 || hasOverflowButtons);
+    const onClickItemHandler = legendItems.length > 1 ? onClickItem : undefined;
+    const onFocusItemHandler = legendItems.length > 2 ? onFocusItem : undefined;
+    const onHoverItemHandler = legendItems.length > 1 ? onHoverItem : undefined;
+
+    const initialHeight = useMemo(() => {
+      const hasHeadline = !completedInitialAnimation.current
+        ? showLegendHeadline
+        : legendItems.some((item) => item.headline);
+      if (hasHeadline) return "38px";
+      return "24px";
+    }, [legendItems, showLegendHeadline]);
+
+    const memoizedAnimation = useMemo(() => {
+      if (!animateLegend) return {};
+
+      return {
+        initial: {
+          height:
+            show && !completedInitialAnimation.current ? initialHeight : 0,
+          minHeight:
+            show && !completedInitialAnimation.current ? initialHeight : 0,
+        },
+        animate: {
+          height: showLegend ? initialHeight : 0,
+          minHeight: !completedInitialAnimation.current
+            ? show
+              ? initialHeight
+              : 0
+            : showLegend
+              ? initialHeight
+              : 0,
+        },
+        exit: { height: 0 },
+        transition: { duration: 0.25 },
+      };
+    }, [animateLegend, initialHeight, showLegend]);
+
+    const memoizedChildAnimation = useMemo(() => {
+      if (!animateLegend) return {};
+
+      return {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.25 },
+      };
+    }, [animateLegend, showLegend]);
+
+    const onAnimationComplete = useMemoizedFn(() => {
+      setTimeout(() => {
+        completedInitialAnimation.current = true;
+      }, 250 * 1.5);
+    });
+
+    const forceInitialHeight = useMemo(() => {
+      return !animateLegend && !!show;
+    }, [animateLegend, showLegend, show]);
+
+    return (
+      <ErrorBoundary
+        fallback={
+          <div className="text-status-danger">Error rendering legend</div>
+        }
+      >
+        <motion.div
+          className={`chart-legend flex w-full items-center overflow-hidden ${forceInitialHeight ? "min-h-[24px]" : ""}`}
+          onAnimationComplete={onAnimationComplete}
+          {...memoizedAnimation}
+        >
+          <AnimatePresence mode="wait" initial={false}>
+            {showLegend && (
+              <motion.div
+                key={legendKey}
+                {...memoizedChildAnimation}
+                className="flex w-full flex-nowrap justify-end space-x-2 overflow-hidden"
+              >
+                {shownItems.map((item) => (
+                  <LegendItem
+                    key={item.id + item.serieName}
+                    item={item}
+                    onClickItem={onClickItemHandler}
+                    onFocusItem={onFocusItemHandler}
+                    onHoverItem={onHoverItemHandler}
+                  />
+                ))}
+
+                {hasOverflowButtons && (
+                  <OverflowButton
+                    legendItems={hiddenItems}
+                    onFocusClick={onFocusItem}
+                    onClickItem={onClickItem}
+                    onHoverItem={onHoverItem}
+                  />
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      </ErrorBoundary>
+    );
+  },
+);
+
+ChartLegend.displayName = "ChartLegend";

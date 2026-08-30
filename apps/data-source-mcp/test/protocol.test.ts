@@ -265,6 +265,10 @@ test("serves the shared transport and requires active session scope on every too
     descriptions.create_query_table_artifact ?? "",
     /writes an Azure blob and PostgreSQL metadata/,
   );
+  assert.match(
+    descriptions.finalize_table_artifact ?? "",
+    /idempotent compatibility response/,
+  );
   assert.match(descriptions.prepare_sql_change ?? "", /without modifying/);
   assert.match(
     descriptions.apply_sql_change ?? "",

@@ -239,6 +239,112 @@ test("reports a safe Daytona sandbox outcome for system execution", () => {
   assert.doesNotMatch(JSON.stringify(completed), /private|stdout|command/i);
 });
 
+test("marks explicit MCP error envelopes as failed", () => {
+  const errorEnvelopes = [
+    {
+      error: [{ type: "text", text: "Data source operation failed." }],
+      artifact: {
+        artifactId: "art_42GVBXVGF390TJY56FFVB37JQ4",
+        schemaVersion: "table.v1",
+        rowCount: 42,
+      },
+    },
+    { structuredContent: { error: { code: "ARTIFACT_COMMIT_FAILED" } } },
+    {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: "private backend failure detail" }),
+        },
+      ],
+    },
+    { isError: true, content: [{ type: "text", text: "private detail" }] },
+  ];
+
+  for (const [index, envelope] of errorEnvelopes.entries()) {
+    const state = createTurnEventState();
+    normalizeTurnEvent(
+      modelMessage({
+        toolCalls: [
+          directToolCall({
+            id: `call-error-${index}`,
+            function: { name: "finalize_table_artifact", arguments: "{}" },
+            toolInfo: {
+              type: "mcp",
+              name: "finalize_table_artifact",
+              serverId: "shared",
+              serverName: "forty-two-data-source",
+            },
+          }),
+        ],
+      }),
+      state,
+    );
+    const completed = normalizeTurnEvent(
+      {
+        type: "tool.response",
+        id: `response-error-${index}`,
+        threadId: "main",
+        createdAt: "2026-08-29T00:00:01.000Z",
+        toolCallId: `call-error-${index}`,
+        content: JSON.stringify(envelope),
+      },
+      state,
+    );
+    assert.deepEqual(completed, [
+      {
+        type: "tool.completed",
+        toolCallId: `call-error-${index}`,
+        threadId: "main",
+        tool: {
+          kind: "mcp",
+          name: "finalize_table_artifact",
+          serverName: "forty-two-data-source",
+        },
+        outcome: "error",
+        summary: "Did not complete",
+      },
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(completed),
+      /private|backend failure|ARTIFACT_COMMIT_FAILED/i,
+    );
+  }
+
+  const successState = createTurnEventState();
+  normalizeTurnEvent(
+    modelMessage({ toolCalls: [directToolCall()] }),
+    successState,
+  );
+  assert.deepEqual(
+    normalizeTurnEvent(
+      {
+        type: "tool.response",
+        id: "response-null-error",
+        threadId: "main",
+        createdAt: "2026-08-29T00:00:01.000Z",
+        toolCallId: "call-1",
+        content: JSON.stringify({ error: null, rows: [] }),
+      },
+      successState,
+    ),
+    [
+      {
+        type: "tool.completed",
+        toolCallId: "call-1",
+        threadId: "main",
+        tool: {
+          kind: "mcp",
+          name: "run_read_query",
+          serverName: "forty-two-data-source",
+        },
+        outcome: "success",
+        summary: "Returned 0 rows",
+      },
+    ],
+  );
+});
+
 test("emits only a strict artifact receipt from a wrapped artifact tool", () => {
   const state = createTurnEventState();
   const wrapped = directToolCall({

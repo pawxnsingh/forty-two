@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    ".": "./src/viz/Chart.tsx",
+    "./card": "./src/viz/ChartCard.tsx",
+    "./style-panel": "./src/viz/ChartStylePanel.tsx",
+    "./metrics-schema": "./src/viz/metrics-schema/index.ts",
     "./server": {
       "types": "./dist/server/artifact-contracts.d.ts",
       "default": "./dist/server/artifact-contracts.js"
@@ -11,17 +15,47 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.server.json",
-    "check-types": "tsc --noEmit -p tsconfig.server.json",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "pretest": "pnpm build",
     "test": "node --import tsx --test test/*.test.ts"
   },
+  "peerDependencies": {
+    "next": "16.3.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
   "dependencies": {
     "@forty-two/artifacts": "workspace:*",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/modifiers": "^9.0.0",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@tanstack/react-store": "^0.11.0",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.14.2",
+    "chart.js": "4.5.1",
+    "chartjs-plugin-annotation": "3.1.0",
+    "chartjs-plugin-datalabels": "2.2.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dayjs": "^1.11.21",
+    "font-color-contrast": "^11.1.0",
+    "framer-motion": "12.23.24",
+    "html-to-image": "^1.11.13",
+    "lodash": "^4.17.21",
+    "lucide-react": "^0.552.0",
+    "react-error-boundary": "^6.1.2",
+    "tailwind-merge": "^3.4.0",
+    "utility-types": "^3.11.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",
+    "@types/lodash": "^4.17.20",
     "@types/node": "^24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
     "tsx": "^4.23.12",
     "typescript": "5.9.3"
   }
