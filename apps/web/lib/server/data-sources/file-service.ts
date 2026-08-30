@@ -465,7 +465,10 @@ function commaSeparatedValues(value: string | null): string[] | undefined {
 
 export async function listPublicDataSources(
   searchParams: URLSearchParams,
-): Promise<PublicDataSource[]> {
+): Promise<{
+  data: PublicDataSource[];
+  nextPageToken: string | null;
+}> {
   await ensureDatabase();
   let connectorTypes: DataSourceType[] | undefined;
   let statuses: ActiveDataSourceStatus[] | undefined;
@@ -496,8 +499,48 @@ export async function listPublicDataSources(
     );
   }
 
-  const rows = await listDataSources({ connectorTypes, statuses, limit });
-  return rows.map(publicDataSource);
+  let before: { createdAt: Date; id: string } | undefined;
+  const pageToken = searchParams.get("pageToken");
+  if (pageToken) {
+    try {
+      const decoded = JSON.parse(
+        Buffer.from(pageToken, "base64url").toString("utf8"),
+      ) as unknown;
+      const parsed = z
+        .object({ createdAt: z.string().datetime(), id: DataSourceIdSchema })
+        .strict()
+        .parse(decoded);
+      before = { createdAt: new Date(parsed.createdAt), id: parsed.id };
+    } catch {
+      throw new DataSourceApiError(
+        400,
+        "INVALID_DATA_SOURCE_FILTER",
+        "pageToken is invalid.",
+      );
+    }
+  }
+
+  const rows = await listDataSources({
+    before,
+    connectorTypes,
+    statuses,
+    limit: limit + 1,
+  });
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    data: page.map(publicDataSource),
+    nextPageToken:
+      rows.length > limit && last
+        ? Buffer.from(
+            JSON.stringify({
+              createdAt: last.createdAt.toISOString(),
+              id: last.id,
+            }),
+            "utf8",
+          ).toString("base64url")
+        : null,
+  };
 }
 
 export async function deletePublicDataSource(

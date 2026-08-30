@@ -104,7 +104,7 @@ export const useDatasetOptions = (params: DatasetHookParams): DatasetHookResult 
   //WILL ONLY BE USED FOR BAR AND PIE CHART
   const xFieldSorts: string[] = useMemo(() => {
     if (isPieChart) {
-      if (pieSortBy === 'key') return xFieldColumnLabelFormatColumnTypes;
+      if (pieSortBy === 'key') return xFields;
       return [];
     }
 
@@ -116,8 +116,20 @@ export const useDatasetOptions = (params: DatasetHookParams): DatasetHookResult 
       return [xFields[0] ?? ''];
     }
 
-    return xFieldColumnLabelFormatColumnTypes.filter((columnType) => columnType === 'date');
-  }, [xFieldColumnLabelFormatColumnTypes, pieSortBy, isPieChart, isBarChart, isScatter, barSortBy]);
+    return xFields.filter(
+      (field) =>
+        (columnLabelFormats[field]?.columnType ||
+          DEFAULT_COLUMN_LABEL_FORMAT.columnType) === 'date'
+    );
+  }, [
+    xFields,
+    columnLabelFormats,
+    pieSortBy,
+    isPieChart,
+    isBarChart,
+    isScatter,
+    barSortBy,
+  ]);
 
   const xFieldSortsString = useMemo(() => xFieldSorts.join(','), [xFieldSorts]);
 
@@ -131,8 +143,8 @@ export const useDatasetOptions = (params: DatasetHookParams): DatasetHookResult 
 
   const sortedAndLimitedData = useMemo(() => {
     if (isScatter) return downsampleAndSortScatterData(data, xFields[0] ?? '');
-    return sortLineBarData(data, columnMetadata, xFieldSorts, xFields);
-  }, [data, xFieldSortsString, xFieldsString, isScatter]);
+    return sortLineBarData(data, columnMetadata, xFieldSorts);
+  }, [data, columnMetadata, xFieldSortsString, xFieldsString, isScatter]);
 
   const measureFieldsReplaceDataWithKey = useMemo(() => {
     return measureFields

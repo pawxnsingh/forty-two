@@ -54,20 +54,37 @@ export function ConnectorsList() {
     null,
   );
   const [deleting, setDeleting] = useState(false);
+  const [startingSourceId, setStartingSourceId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ConnectorFilter>("all");
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const response = await fetch("/api/data-sources?limit=100", {
-        cache: "no-store",
-      });
-      if (!response.ok)
-        throw new Error(
-          await responseMessage(response, "Connectors could not be loaded."),
-        );
-      const payload = (await response.json()) as { data: PublicDataSource[] };
-      setSources(payload.data);
+      const loaded: PublicDataSource[] = [];
+      const seenTokens = new Set<string>();
+      let pageToken: string | null = null;
+      do {
+        const search = new URLSearchParams({ limit: "100" });
+        if (pageToken) search.set("pageToken", pageToken);
+        const response = await fetch(`/api/data-sources?${search}`, {
+          cache: "no-store",
+        });
+        if (!response.ok)
+          throw new Error(
+            await responseMessage(response, "Connectors could not be loaded."),
+          );
+        const payload = (await response.json()) as {
+          data: PublicDataSource[];
+          pagination?: { nextPageToken: string | null };
+        };
+        loaded.push(...payload.data);
+        pageToken = payload.pagination?.nextPageToken ?? null;
+        if (pageToken && seenTokens.has(pageToken)) {
+          throw new Error("Connector pagination did not advance.");
+        }
+        if (pageToken) seenTokens.add(pageToken);
+      } while (pageToken);
+      setSources(loaded);
     } catch (loadError) {
       setSources([]);
       setError(
@@ -107,6 +124,36 @@ export function ConnectorsList() {
       );
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function startConversation(source: PublicDataSource) {
+    if (startingSourceId) return;
+    setStartingSourceId(source.id);
+    setError(null);
+    try {
+      const response = await fetch("/api/chat/sessions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ dataSourceIds: [source.id] }),
+      });
+      if (!response.ok)
+        throw new Error(
+          await responseMessage(response, "The conversation could not be started."),
+        );
+      const payload = (await response.json()) as { data: { id: string } };
+      window.dispatchEvent(new Event("forty-two:sessions-changed"));
+      router.push(`/chat/${encodeURIComponent(payload.data.id)}`);
+    } catch (startError) {
+      setError(
+        startError instanceof Error
+          ? startError.message
+          : "The conversation could not be started.",
+      );
+      setStartingSourceId(null);
     }
   }
 
@@ -289,15 +336,13 @@ export function ConnectorsList() {
                                 {source.status === "ready" ? (
                                   <DropdownMenuItem
                                     id="start-conversation"
-                                    onAction={() =>
-                                      router.push(
-                                        `/chat?source=${encodeURIComponent(source.id)}`,
-                                      )
-                                    }
+                                    onAction={() => void startConversation(source)}
                                     textValue="Start conversation"
                                   >
                                     <MessageSquareText aria-hidden="true" />
-                                    Start conversation
+                                    {startingSourceId === source.id
+                                      ? "Starting conversation…"
+                                      : "Start conversation"}
                                   </DropdownMenuItem>
                                 ) : null}
                                 <DropdownMenuItem

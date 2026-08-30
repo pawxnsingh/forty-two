@@ -79,7 +79,14 @@ export function OpDonutChart({
   centerValue,
   centerLabel,
 }: OpDonutChartProps) {
-  const total = segments.reduce((sum, segment) => sum + Math.max(segment.value, 0), 0);
+  const normalizedSegments = segments.map((segment) => ({
+    ...segment,
+    value: Number.isFinite(segment.value) ? Math.max(segment.value, 0) : 0,
+  }));
+  const total = normalizedSegments.reduce(
+    (sum, segment) => sum + segment.value,
+    0,
+  );
 
   return (
     <OpChartFrame
@@ -104,10 +111,10 @@ export function OpDonutChart({
                   cornerRadius={5}
                   cx={CENTRE}
                   cy={CENTRE}
-                  data={segments.map((segment) => ({
+                  data={normalizedSegments.map((segment) => ({
                     name: segment.label,
-                    value: Math.max(segment.value, 0),
-                    share: Math.max(segment.value, 0) / total,
+                    value: segment.value,
+                    share: segment.value / total,
                     fill: seriesColor(segment.role),
                   }))}
                   dataKey="value"

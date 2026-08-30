@@ -86,7 +86,7 @@ export function aggregateAndCreateDatasets<
       for (const k of keys) {
         rec[k] = String((row as Record<string, string | number | null | undefined>)[k]);
       }
-      const id = keys.map((k) => rec[k]).join('|');
+      const id = JSON.stringify(keys.map((key) => rec[key]));
       if (!map.has(id)) {
         map.set(id, { rec, rows: [] });
       }

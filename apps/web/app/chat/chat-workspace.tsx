@@ -721,7 +721,13 @@ export function ChatWorkspace({
   );
   const [plan, setPlan] = useState<Plan | null>(null);
   const streams = useRef(new Map<string, EventSource>());
-  const capabilityRenewal = useRef<Promise<string | null> | null>(null);
+  const activeSessionId = useRef(initialSessionId);
+  activeSessionId.current = initialSessionId;
+  const capabilityRenewal = useRef<{
+    controller: AbortController;
+    promise: Promise<string | null>;
+    sessionId: string;
+  } | null>(null);
   const sessionCreation = useRef<{
     fingerprint: string;
     idempotencyKey: string;
@@ -730,6 +736,13 @@ export function ChatWorkspace({
   const running = turns.some((turn) => turn.running);
 
   useEffect(() => {
+    if (
+      capabilityRenewal.current &&
+      capabilityRenewal.current.sessionId !== initialSessionId
+    ) {
+      capabilityRenewal.current.controller.abort();
+      capabilityRenewal.current = null;
+    }
     setCapability(
       initialSessionId
         ? sessionStorage.getItem(
@@ -742,12 +755,18 @@ export function ChatWorkspace({
   const renewCapability = useCallback(
     async (expiredCapability: string): Promise<string | null> => {
       if (!initialSessionId) return null;
-      if (capabilityRenewal.current) return capabilityRenewal.current;
+      if (capabilityRenewal.current?.sessionId === initialSessionId) {
+        return capabilityRenewal.current.promise;
+      }
+      capabilityRenewal.current?.controller.abort();
+      const controller = new AbortController();
+      const sessionId = initialSessionId;
       const renewal = fetch(
-        `/api/chat/sessions/${initialSessionId}/artifacts/capability`,
+        `/api/chat/sessions/${sessionId}/artifacts/capability`,
         {
           method: "POST",
           headers: { authorization: `Bearer ${expiredCapability}` },
+          signal: controller.signal,
         },
       )
         .then(async (response) => {
@@ -755,8 +774,9 @@ export function ChatWorkspace({
           const payload = (await response.json()) as {
             data: { artifactCapability: string };
           };
+          if (activeSessionId.current !== sessionId) return null;
           sessionStorage.setItem(
-            `forty-two-artifact-capability:${initialSessionId}`,
+            `forty-two-artifact-capability:${sessionId}`,
             payload.data.artifactCapability,
           );
           setCapability(payload.data.artifactCapability);
@@ -764,20 +784,23 @@ export function ChatWorkspace({
         })
         .catch(() => null)
         .finally(() => {
-          capabilityRenewal.current = null;
+          if (capabilityRenewal.current?.promise === renewal) {
+            capabilityRenewal.current = null;
+          }
         });
-      capabilityRenewal.current = renewal;
+      capabilityRenewal.current = { controller, promise: renewal, sessionId };
       return renewal;
     },
     [initialSessionId],
   );
 
-  const loadSources = useCallback(async () => {
+  const loadSources = useCallback(async (signal: AbortSignal) => {
     if (initialSessionId) {
       const sessionResponse = await fetch(
         `/api/chat/sessions/${initialSessionId}`,
-        { cache: "no-store" },
+        { cache: "no-store", signal },
       );
+      if (signal.aborted) return;
       if (!sessionResponse.ok) {
         setError(
           await apiMessage(sessionResponse, "Session sources are unavailable."),
@@ -787,16 +810,19 @@ export function ChatWorkspace({
       const payload = (await sessionResponse.json()) as {
         data: { dataSources: DataSource[] };
       };
+      if (signal.aborted) return;
       setSources(payload.data.dataSources);
       setSelectedSourceIds(payload.data.dataSources.map((source) => source.id));
       return;
     }
     const sourceResponse = await fetch(
       "/api/data-sources?status=ready&limit=100",
-      { cache: "no-store" },
+      { cache: "no-store", signal },
     );
+    if (signal.aborted) return;
     if (sourceResponse.ok) {
       const payload = (await sourceResponse.json()) as { data: DataSource[] };
+      if (signal.aborted) return;
       setSources(payload.data);
       const requestedSource = initialSourceId
         ? payload.data.find((source) => source.id === initialSourceId)
@@ -825,7 +851,7 @@ export function ChatWorkspace({
     });
     if (!response.ok) return;
     const payload = (await response.json()) as { data: { plan: Plan | null } };
-    setPlan(payload.data.plan);
+    if (activeSessionId.current === sessionId) setPlan(payload.data.plan);
   }, []);
 
   const openStream = useCallback(
@@ -836,6 +862,7 @@ export function ChatWorkspace({
       );
       streams.current.set(turnId, stream);
       const receive = (raw: Event) => {
+        if (activeSessionId.current !== sessionId) return;
         let event: NormalizedEvent;
         try {
           event = JSON.parse(
@@ -872,6 +899,11 @@ export function ChatWorkspace({
         stream.addEventListener(category, receive),
       );
       stream.onerror = () => {
+        if (activeSessionId.current !== sessionId) {
+          stream.close();
+          streams.current.delete(turnId);
+          return;
+        }
         void reconcileStreamError({
           loadHistory: async () => {
             const response = await fetch(
@@ -903,10 +935,15 @@ export function ChatWorkspace({
   );
 
   useEffect(() => {
-    void loadSources();
+    const controller = new AbortController();
+    void loadSources(controller.signal).catch(() => undefined);
+    return () => controller.abort();
   }, [loadSources]);
 
   useEffect(() => {
+    const sessionStreams = streams.current;
+    sessionStreams.forEach((stream) => stream.close());
+    sessionStreams.clear();
     if (!initialSessionId) {
       setTurns([]);
       setPlan(null);
@@ -973,7 +1010,11 @@ export function ChatWorkspace({
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      sessionStreams.forEach((stream) => stream.close());
+      sessionStreams.clear();
+    };
   }, [initialSessionId, openStream, refreshPlan]);
 
   useEffect(
