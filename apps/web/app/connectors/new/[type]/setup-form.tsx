@@ -429,28 +429,36 @@ export function ConnectorSetupForm({ type }: { type: ConnectorType }) {
       data: PublicDataSource;
       upload: { headers: Record<string, string>; method: "PUT"; url: string };
     };
-    const uploadResponse = await fetch(initiated.upload.url, {
-      method: initiated.upload.method,
-      headers: initiated.upload.headers,
-      body: file,
-    });
-    if (!uploadResponse.ok)
-      throw new Error("The file could not be uploaded to storage.");
-    const completeResponse = await fetch(
-      `/api/data-sources/${encodeURIComponent(initiated.data.id)}/complete`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      },
-    );
-    if (!completeResponse.ok)
-      throw new Error(
-        await responseMessage(
-          completeResponse,
-          "The uploaded file could not be processed.",
-        ),
+    try {
+      const uploadResponse = await fetch(initiated.upload.url, {
+        method: initiated.upload.method,
+        headers: initiated.upload.headers,
+        body: file,
+      });
+      if (!uploadResponse.ok)
+        throw new Error("The file could not be uploaded to storage.");
+      const completeResponse = await fetch(
+        `/api/data-sources/${encodeURIComponent(initiated.data.id)}/complete`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        },
       );
+      if (!completeResponse.ok)
+        throw new Error(
+          await responseMessage(
+            completeResponse,
+            "The uploaded file could not be processed.",
+          ),
+        );
+    } catch (uploadError) {
+      await fetch(
+        `/api/data-sources/${encodeURIComponent(initiated.data.id)}`,
+        { method: "DELETE" },
+      ).catch(() => undefined);
+      throw uploadError;
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {

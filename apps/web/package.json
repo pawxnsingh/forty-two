@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint --max-warnings 0",
     "check-types": "next typegen && tsc --noEmit",
+    "test": "pnpm test:data-sources && pnpm test:chat-backend",
     "sweep:file-datasource-blobs": "node --env-file-if-exists=../../.env --import tsx scripts/sweep-file-data-source-blobs.ts",
     "test:data-sources": "node --import tsx --test lib/server/data-sources/*.unit.test.ts",
     "test:chat-backend": "node --import tsx --test lib/server/chat-backend.unit.test.ts",
