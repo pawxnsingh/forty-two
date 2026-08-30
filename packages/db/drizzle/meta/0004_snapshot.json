@@ -1,0 +1,643 @@
+{
+  "id": "f672ba9b-120b-471b-b268-ec5f4e7d5772",
+  "prevId": "95c7f5c1-56e8-4d5f-8710-0ac043ad9f26",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.chat_session_data_sources": {
+      "name": "chat_session_data_sources",
+      "schema": "",
+      "columns": {
+        "chat_session_id": {
+          "name": "chat_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "data_source_id": {
+          "name": "data_source_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "chat_session_data_sources_data_source_id_idx": {
+          "name": "chat_session_data_sources_data_source_id_idx",
+          "columns": [
+            {
+              "expression": "data_source_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "chat_session_data_sources_chat_session_id_chat_sessions_id_fk": {
+          "name": "chat_session_data_sources_chat_session_id_chat_sessions_id_fk",
+          "tableFrom": "chat_session_data_sources",
+          "tableTo": "chat_sessions",
+          "columnsFrom": [
+            "chat_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        },
+        "chat_session_data_sources_data_source_id_data_sources_id_fk": {
+          "name": "chat_session_data_sources_data_source_id_data_sources_id_fk",
+          "tableFrom": "chat_session_data_sources",
+          "tableTo": "data_sources",
+          "columnsFrom": [
+            "data_source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {
+        "chat_session_data_sources_pk": {
+          "name": "chat_session_data_sources_pk",
+          "columns": [
+            "chat_session_id",
+            "data_source_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.chat_sessions": {
+      "name": "chat_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "trueforge_session_id": {
+          "name": "trueforge_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mcp_server_name": {
+          "name": "mcp_server_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "capability_id": {
+          "name": "capability_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capability_expires_at": {
+          "name": "capability_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capability_revoked_at": {
+          "name": "capability_revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_request_hash": {
+          "name": "idempotency_request_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "chat_session_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'creating'"
+        },
+        "failure_message": {
+          "name": "failure_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plan": {
+          "name": "plan",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plan_revision": {
+          "name": "plan_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "plan_updated_at": {
+          "name": "plan_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plan_question_key": {
+          "name": "plan_question_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "chat_sessions_status_created_at_idx": {
+          "name": "chat_sessions_status_created_at_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "chat_sessions_trueforge_session_id_unique": {
+          "name": "chat_sessions_trueforge_session_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "trueforge_session_id"
+          ]
+        },
+        "chat_sessions_mcp_server_name_unique": {
+          "name": "chat_sessions_mcp_server_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "mcp_server_name"
+          ]
+        },
+        "chat_sessions_capability_id_unique": {
+          "name": "chat_sessions_capability_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "capability_id"
+          ]
+        },
+        "chat_sessions_idempotency_key_unique": {
+          "name": "chat_sessions_idempotency_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "chat_sessions_id_format_check": {
+          "name": "chat_sessions_id_format_check",
+          "value": "\"chat_sessions\".\"id\" ~ '^sess_[0-9A-HJKMNP-TV-Z]{26}$'"
+        },
+        "chat_sessions_active_identifiers_check": {
+          "name": "chat_sessions_active_identifiers_check",
+          "value": "\"chat_sessions\".\"status\" <> 'active' OR (\n        \"chat_sessions\".\"trueforge_session_id\" IS NOT NULL\n        AND char_length(btrim(\"chat_sessions\".\"trueforge_session_id\")) > 0\n        AND \"chat_sessions\".\"mcp_server_name\" IS NOT NULL\n        AND char_length(btrim(\"chat_sessions\".\"mcp_server_name\")) > 0\n      )"
+        },
+        "chat_sessions_failure_message_check": {
+          "name": "chat_sessions_failure_message_check",
+          "value": "(\n        \"chat_sessions\".\"status\" = 'failed'\n        AND \"chat_sessions\".\"failure_message\" IS NOT NULL\n        AND char_length(btrim(\"chat_sessions\".\"failure_message\")) BETWEEN 1 AND 4000\n      ) OR (\n        \"chat_sessions\".\"status\" IN ('creating', 'active')\n        AND \"chat_sessions\".\"failure_message\" IS NULL\n      ) OR (\n        \"chat_sessions\".\"status\" = 'deleted'\n        AND (\n          \"chat_sessions\".\"failure_message\" IS NULL\n          OR char_length(btrim(\"chat_sessions\".\"failure_message\")) BETWEEN 1 AND 4000\n        )\n      )"
+        },
+        "chat_sessions_capability_expiry_check": {
+          "name": "chat_sessions_capability_expiry_check",
+          "value": "\"chat_sessions\".\"capability_expires_at\" > \"chat_sessions\".\"created_at\""
+        },
+        "chat_sessions_idempotency_pair_check": {
+          "name": "chat_sessions_idempotency_pair_check",
+          "value": "(\"chat_sessions\".\"idempotency_key\" IS NULL) = (\"chat_sessions\".\"idempotency_request_hash\" IS NULL)"
+        },
+        "chat_sessions_idempotency_hash_check": {
+          "name": "chat_sessions_idempotency_hash_check",
+          "value": "\"chat_sessions\".\"idempotency_request_hash\" IS NULL OR \"chat_sessions\".\"idempotency_request_hash\" ~ '^[0-9a-f]{64}$'"
+        },
+        "chat_sessions_deleted_state_check": {
+          "name": "chat_sessions_deleted_state_check",
+          "value": "(\"chat_sessions\".\"status\" = 'deleted') = (\"chat_sessions\".\"deleted_at\" IS NOT NULL)"
+        },
+        "chat_sessions_timestamp_order_check": {
+          "name": "chat_sessions_timestamp_order_check",
+          "value": "\"chat_sessions\".\"updated_at\" >= \"chat_sessions\".\"created_at\"\n        AND (\"chat_sessions\".\"deleted_at\" IS NULL OR \"chat_sessions\".\"deleted_at\" >= \"chat_sessions\".\"created_at\")\n        AND (\"chat_sessions\".\"capability_revoked_at\" IS NULL OR \"chat_sessions\".\"capability_revoked_at\" >= \"chat_sessions\".\"created_at\")"
+        },
+        "chat_sessions_plan_revision_check": {
+          "name": "chat_sessions_plan_revision_check",
+          "value": "\"chat_sessions\".\"plan_revision\" >= 0"
+        },
+        "chat_sessions_plan_shape_check": {
+          "name": "chat_sessions_plan_shape_check",
+          "value": "\"chat_sessions\".\"plan\" IS NULL OR jsonb_typeof(\"chat_sessions\".\"plan\") = 'object'"
+        },
+        "chat_sessions_plan_timestamp_check": {
+          "name": "chat_sessions_plan_timestamp_check",
+          "value": "(\"chat_sessions\".\"plan\" IS NULL OR \"chat_sessions\".\"plan_updated_at\" IS NOT NULL)\n        AND (\"chat_sessions\".\"plan_updated_at\" IS NULL OR \"chat_sessions\".\"plan_updated_at\" >= \"chat_sessions\".\"created_at\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.data_source_credentials": {
+      "name": "data_source_credentials",
+      "schema": "",
+      "columns": {
+        "data_source_id": {
+          "name": "data_source_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "iv": {
+          "name": "iv",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_tag": {
+          "name": "auth_tag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryption_version": {
+          "name": "encryption_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "data_source_credentials_data_source_id_data_sources_id_fk": {
+          "name": "data_source_credentials_data_source_id_data_sources_id_fk",
+          "tableFrom": "data_source_credentials",
+          "tableTo": "data_sources",
+          "columnsFrom": [
+            "data_source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "data_source_credentials_ciphertext_nonempty_check": {
+          "name": "data_source_credentials_ciphertext_nonempty_check",
+          "value": "char_length(\"data_source_credentials\".\"ciphertext\") > 0"
+        },
+        "data_source_credentials_iv_nonempty_check": {
+          "name": "data_source_credentials_iv_nonempty_check",
+          "value": "char_length(\"data_source_credentials\".\"iv\") > 0"
+        },
+        "data_source_credentials_auth_tag_nonempty_check": {
+          "name": "data_source_credentials_auth_tag_nonempty_check",
+          "value": "char_length(\"data_source_credentials\".\"auth_tag\") > 0"
+        },
+        "data_source_credentials_encryption_version_check": {
+          "name": "data_source_credentials_encryption_version_check",
+          "value": "\"data_source_credentials\".\"encryption_version\" > 0"
+        },
+        "data_source_credentials_revision_check": {
+          "name": "data_source_credentials_revision_check",
+          "value": "\"data_source_credentials\".\"revision\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.data_sources": {
+      "name": "data_sources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "connector_type": {
+          "name": "connector_type",
+          "type": "data_source_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "data_source_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "original_filename": {
+          "name": "original_filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "file_size_bytes": {
+          "name": "file_size_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "azure_blob_name": {
+          "name": "azure_blob_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "azure_etag": {
+          "name": "azure_etag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "processing_message": {
+          "name": "processing_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "data_sources_status_type_idx": {
+          "name": "data_sources_status_type_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connector_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_sources_deleted_at_idx": {
+          "name": "data_sources_deleted_at_idx",
+          "columns": [
+            {
+              "expression": "deleted_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_sources_ready_created_at_idx": {
+          "name": "data_sources_ready_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"data_sources\".\"status\" = 'ready' AND \"data_sources\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_sources_azure_blob_name_unique_idx": {
+          "name": "data_sources_azure_blob_name_unique_idx",
+          "columns": [
+            {
+              "expression": "azure_blob_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"data_sources\".\"azure_blob_name\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "data_sources_id_format_check": {
+          "name": "data_sources_id_format_check",
+          "value": "\"data_sources\".\"id\" ~ '^ds_[0-9A-HJKMNP-TV-Z]{26}$'"
+        },
+        "data_sources_name_nonempty_check": {
+          "name": "data_sources_name_nonempty_check",
+          "value": "char_length(btrim(\"data_sources\".\"name\")) > 0"
+        },
+        "data_sources_config_object_check": {
+          "name": "data_sources_config_object_check",
+          "value": "jsonb_typeof(\"data_sources\".\"config\") = 'object'"
+        },
+        "data_sources_file_size_check": {
+          "name": "data_sources_file_size_check",
+          "value": "\"data_sources\".\"file_size_bytes\" IS NULL OR (\"data_sources\".\"file_size_bytes\" >= 0 AND \"data_sources\".\"file_size_bytes\" <= 9007199254740991)"
+        },
+        "data_sources_connector_metadata_check": {
+          "name": "data_sources_connector_metadata_check",
+          "value": "(\n        \"data_sources\".\"connector_type\" IN ('postgresql', 'mysql', 'sqlserver', 'snowflake', 'bigquery', 'redshift')\n        AND \"data_sources\".\"original_filename\" IS NULL\n        AND \"data_sources\".\"mime_type\" IS NULL\n        AND \"data_sources\".\"file_size_bytes\" IS NULL\n        AND \"data_sources\".\"azure_blob_name\" IS NULL\n        AND \"data_sources\".\"azure_etag\" IS NULL\n      ) OR (\n        \"data_sources\".\"connector_type\" IN ('csv', 'xlsx')\n        AND \"data_sources\".\"original_filename\" IS NOT NULL\n        AND \"data_sources\".\"mime_type\" IS NOT NULL\n        AND \"data_sources\".\"file_size_bytes\" IS NOT NULL\n        AND \"data_sources\".\"azure_blob_name\" IS NOT NULL\n      )"
+        },
+        "data_sources_connector_status_check": {
+          "name": "data_sources_connector_status_check",
+          "value": "(\n        \"data_sources\".\"connector_type\" IN ('csv', 'xlsx')\n        AND \"data_sources\".\"status\" <> 'testing'\n      ) OR (\n        \"data_sources\".\"connector_type\" IN ('postgresql', 'mysql', 'sqlserver', 'snowflake', 'bigquery', 'redshift')\n        AND \"data_sources\".\"status\" <> 'awaiting_upload'\n      )"
+        },
+        "data_sources_ready_file_etag_check": {
+          "name": "data_sources_ready_file_etag_check",
+          "value": "\"data_sources\".\"connector_type\" NOT IN ('csv', 'xlsx')\n        OR \"data_sources\".\"status\" <> 'ready'\n        OR (\"data_sources\".\"azure_etag\" IS NOT NULL AND char_length(btrim(\"data_sources\".\"azure_etag\")) > 0)"
+        },
+        "data_sources_deleted_state_check": {
+          "name": "data_sources_deleted_state_check",
+          "value": "(\"data_sources\".\"status\" = 'deleted') = (\"data_sources\".\"deleted_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.chat_session_status": {
+      "name": "chat_session_status",
+      "schema": "public",
+      "values": [
+        "creating",
+        "active",
+        "failed",
+        "deleted"
+      ]
+    },
+    "public.data_source_status": {
+      "name": "data_source_status",
+      "schema": "public",
+      "values": [
+        "awaiting_upload",
+        "testing",
+        "ready",
+        "failed",
+        "deleted"
+      ]
+    },
+    "public.data_source_type": {
+      "name": "data_source_type",
+      "schema": "public",
+      "values": [
+        "csv",
+        "xlsx",
+        "postgresql",
+        "mysql",
+        "sqlserver",
+        "snowflake",
+        "bigquery",
+        "redshift"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

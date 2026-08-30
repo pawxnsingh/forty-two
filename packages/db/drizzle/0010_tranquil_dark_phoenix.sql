@@ -1,0 +1,1 @@
+ALTER TYPE "public"."sql_change_status" ADD VALUE 'partial' BEFORE 'failed';
