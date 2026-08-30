@@ -271,6 +271,14 @@ describe("analysis artifact repositories against PostgreSQL", () => {
     assert.ok(due.some((artifact) => artifact.id === table.id));
     assert.equal(
       await markAnalysisArtifactCleanupCompleted({ artifactId: table.id }),
+      false,
+    );
+    const completedAt = new Date(Date.now() + 8 * 24 * 60 * 60_000);
+    assert.equal(
+      await markAnalysisArtifactCleanupCompleted({
+        artifactId: table.id,
+        completedAt,
+      }),
       true,
     );
     assert.equal(

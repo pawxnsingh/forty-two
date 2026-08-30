@@ -48,6 +48,7 @@ export async function markAnalysisArtifactCleanupCompleted(input: {
       and(
         eq(analysisArtifacts.id, parsed.artifactId),
         eq(analysisArtifacts.status, "deleted"),
+        lte(analysisArtifacts.retentionExpiresAt, parsed.completedAt),
         isNull(analysisArtifacts.cleanupCompletedAt),
       ),
     )
