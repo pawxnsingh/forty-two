@@ -527,8 +527,13 @@ test("persisted ds_ bindings scope every MCP tool, file SAS, and revocation", as
     listed.structuredContent?.dataSources.map(
       (source: { name: string }) => source.name,
     ),
-    [firstDatabaseId],
+    [firstDatabaseId, fileId],
   );
+  assert.deepEqual(listed.structuredContent?.dataSources[1], {
+    name: fileId,
+    type: "csv",
+    description: "Bound file",
+  });
 
   const allowed = await client.callTool({
     name: "run_read_query",

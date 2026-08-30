@@ -542,18 +542,27 @@ function dialectFor(connector: DatabaseConnectorType): SqlChangeDialect {
 }
 
 export function requireAllowedTarget(
-  target: { catalog: string | null; schema: string | null; table: string },
+  target: {
+    catalog: string | null;
+    schema: string | null;
+    table: string;
+    sql?: string;
+  },
   mutation: NonNullable<
     Awaited<ReturnType<ConnectionRegistry["get"]>>["mutation"]
   >,
 ): { catalog: string | null; schema: string | null; table: string } {
+  const quotedTarget = Boolean(target.sql && /["`\[\]]/.test(target.sql));
+  const matches = (allowed: string | null, requested: string | null) =>
+    requested === null ||
+    (quotedTarget
+      ? allowed === requested
+      : allowed?.toLowerCase() === requested.toLowerCase());
   const candidates = mutation.allowedTargets.filter(
     (candidate) =>
-      candidate.table.toLowerCase() === target.table.toLowerCase() &&
-      (target.catalog === null ||
-        candidate.catalog?.toLowerCase() === target.catalog.toLowerCase()) &&
-      (target.schema === null ||
-        candidate.schema?.toLowerCase() === target.schema.toLowerCase()),
+      matches(candidate.table, target.table) &&
+      matches(candidate.catalog, target.catalog) &&
+      matches(candidate.schema, target.schema),
   );
   if (candidates.length !== 1) {
     throw new Error(

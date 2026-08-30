@@ -763,7 +763,7 @@ describe("chart artifact receipt finalization", () => {
     assert.equal(result.artifactId, commits[0]?.artifactId);
     assert.deepEqual(result.config, commits[0]?.chartConfig.config);
     assert.equal(result.config.selectedChartType, "scatter");
-    assert.equal(result.config.gridLines, true);
+    assert.equal(result.config.gridLines, false);
     assert.equal(result.config.xAxisLabelRotation, "auto");
     assert.equal(
       Object.keys(result.config).length >

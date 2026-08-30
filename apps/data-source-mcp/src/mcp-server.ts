@@ -167,9 +167,17 @@ export function createDataSourceMcpServer(
     async ({ sessionId }) => {
       const scope = await requireActiveScope(options, sessionId);
       const listed = await registry.list();
+      const databasesById = new Map(
+        listed.map((source) => [source.name, source] as const),
+      );
       return toolSuccess({
-        dataSources: listed.filter((source) =>
-          scopedIds(scope).has(source.name),
+        dataSources: scope.dataSources.map(
+          (source) =>
+            databasesById.get(source.id) ?? {
+              name: source.id,
+              type: source.connectorType,
+              description: source.name,
+            },
         ),
       });
     },

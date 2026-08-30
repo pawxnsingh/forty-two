@@ -237,6 +237,53 @@ test("qualified MySQL DML normalizes before the earliest allowlist check", () =>
   assert.throws(() => requireAllowedTarget(alternate, mutation), /allowlist/);
 });
 
+test("quoted row targets cannot alias an unquoted allowlist entry", () => {
+  const mutation = {
+    mode: "controlled" as const,
+    connectorType: "postgresql" as const,
+    credentialRevision: 1,
+    allowedCatalog: null,
+    allowedSchema: "public",
+    allowedTargets: [{ catalog: null, schema: "public", table: "users" }],
+  };
+  const quoted = normalizeSqlChangeTarget(
+    parseSqlChange(
+      'UPDATE public."USERS" SET enabled = TRUE WHERE id = 1',
+      "postgresql",
+    ).target,
+    "postgresql",
+  );
+  assert.throws(
+    () => requireAllowedTarget(quoted, mutation),
+    /Quoted|allowlist/,
+  );
+  const exactlyQuoted = normalizeSqlChangeTarget(
+    parseSqlChange(
+      'UPDATE public."users" SET enabled = TRUE WHERE id = 1',
+      "postgresql",
+    ).target,
+    "postgresql",
+  );
+  assert.deepEqual(requireAllowedTarget(exactlyQuoted, mutation), {
+    catalog: null,
+    schema: "public",
+    table: "users",
+  });
+  assert.deepEqual(
+    requireAllowedTarget(
+      normalizeSqlChangeTarget(
+        parseSqlChange(
+          "UPDATE public.users SET enabled = TRUE WHERE id = 1",
+          "postgresql",
+        ).target,
+        "postgresql",
+      ),
+      mutation,
+    ),
+    { catalog: null, schema: "public", table: "users" },
+  );
+});
+
 test("BigQuery cost cap rejects excessive or missing prepare evidence", () => {
   const previous = process.env.SQL_CHANGE_MAX_BIGQUERY_BYTES_BILLED;
   process.env.SQL_CHANGE_MAX_BIGQUERY_BYTES_BILLED = "1000";
