@@ -1,0 +1,1 @@
+DROP INDEX "analysis_artifacts_session_hash_kind_unique_idx";
