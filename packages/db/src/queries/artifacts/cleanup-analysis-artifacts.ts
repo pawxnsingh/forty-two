@@ -2,8 +2,9 @@ import { and, eq, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { getDatabase } from "../../database.js";
-import { AnalysisArtifactIdSchema } from "../../ids.js";
+import { AnalysisArtifactIdSchema, ChatSessionIdSchema } from "../../ids.js";
 import { analysisArtifacts } from "../../schema/analysis-artifacts.js";
+import { chatSessions } from "../../schema/chat-sessions.js";
 import { parseAnalysisArtifact } from "./shared.js";
 
 export async function listAnalysisArtifactsDueForCleanup(input: {
@@ -130,24 +131,45 @@ export async function softDeleteSessionAnalysisArtifacts(input: {
 }): Promise<number> {
   const parsed = z
     .object({
-      chatSessionId: z.string(),
+      chatSessionId: ChatSessionIdSchema,
       retentionDays: z.number().int().min(1).max(30).default(7),
     })
     .parse(input);
-  const rows = await getDatabase()
-    .update(analysisArtifacts)
-    .set({
-      status: "deleted",
-      deletedAt: sql`CURRENT_TIMESTAMP`,
-      retentionExpiresAt: sql`CURRENT_TIMESTAMP + (${parsed.retentionDays} * interval '1 day')`,
-    })
-    .where(
-      and(
-        eq(analysisArtifacts.chatSessionId, parsed.chatSessionId),
-        eq(analysisArtifacts.status, "ready"),
-        isNull(analysisArtifacts.deletedAt),
-      ),
-    )
-    .returning({ id: analysisArtifacts.id });
-  return rows.length;
+  return getDatabase().transaction(async (transaction) => {
+    await transaction.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`forty-two:chat-session:${parsed.chatSessionId}`}, 0))`,
+    );
+    const sessions = await transaction
+      .select({ id: chatSessions.id })
+      .from(chatSessions)
+      .where(
+        and(
+          eq(chatSessions.id, parsed.chatSessionId),
+          eq(chatSessions.status, "deleted"),
+          sql`${chatSessions.deletedAt} IS NOT NULL`,
+        ),
+      )
+      .limit(1);
+    if (!sessions[0]) {
+      throw new Error(
+        "Session artifacts can be deleted only after the application session is deleted.",
+      );
+    }
+    const rows = await transaction
+      .update(analysisArtifacts)
+      .set({
+        status: "deleted",
+        deletedAt: sql`CURRENT_TIMESTAMP`,
+        retentionExpiresAt: sql`CURRENT_TIMESTAMP + (${parsed.retentionDays} * interval '1 day')`,
+      })
+      .where(
+        and(
+          eq(analysisArtifacts.chatSessionId, parsed.chatSessionId),
+          eq(analysisArtifacts.status, "ready"),
+          isNull(analysisArtifacts.deletedAt),
+        ),
+      )
+      .returning({ id: analysisArtifacts.id });
+    return rows.length;
+  });
 }
