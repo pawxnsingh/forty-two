@@ -111,7 +111,9 @@ export function OpBarChart({
                 barCategoryGap="42%"
                 data={data.map((datum) => ({
                   label: datum.label,
-                  value: Number.isFinite(datum.value) ? Math.min(datum.value, max) : null,
+                  value: Number.isFinite(datum.value)
+                    ? Math.max(0, Math.min(datum.value, max))
+                    : null,
                 }))}
                 height={PLOT_HEIGHT}
                 margin={{ top: 6, right: 8, bottom: 0, left: 8 }}

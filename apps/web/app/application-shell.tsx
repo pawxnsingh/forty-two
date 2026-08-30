@@ -50,32 +50,6 @@ function sessionLabel(session: SessionSummary) {
   }).format(new Date(session.updatedAt));
 }
 
-function turnTitle(payload: unknown) {
-  if (!payload || typeof payload !== "object" || !("data" in payload))
-    return null;
-  const turns = (payload as { data?: unknown }).data;
-  if (!Array.isArray(turns)) return null;
-  for (const turn of turns) {
-    if (!turn || typeof turn !== "object" || !("input" in turn)) continue;
-    const input = (turn as { input?: unknown }).input;
-    if (!Array.isArray(input)) continue;
-    const message = input.find(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        "type" in item &&
-        item.type === "user.message" &&
-        "content" in item &&
-        typeof item.content === "string",
-    ) as { content: string } | undefined;
-    if (message) {
-      const title = message.content.replace(/\s+/g, " ").trim();
-      if (title) return title.length > 48 ? `${title.slice(0, 47)}…` : title;
-    }
-  }
-  return null;
-}
-
 function breadcrumbsFor(pathname: string): readonly ApplicationBreadcrumb[] {
   if (pathname.startsWith("/chat")) {
     if (pathname === "/chat") return [{ id: "chat", label: "New session" }];
@@ -121,51 +95,33 @@ export function FortyTwoApplicationShell({
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
-      const loaded: SessionSummary[] = [];
-      let pageToken: string | null = null;
-      do {
-        const search = new URLSearchParams({ limit: "25" });
-        if (pageToken) search.set("pageToken", pageToken);
-        const response = await fetch(`/api/chat/sessions?${search}`, {
+    let controller: AbortController | null = null;
+    const loadSessions = async () => {
+      controller?.abort();
+      controller = new AbortController();
+      try {
+        const response = await fetch("/api/chat/sessions?limit=25", {
           cache: "no-store",
           signal: controller.signal,
         });
         if (!response.ok) return;
         const payload = (await response.json()) as {
           data: SessionSummary[];
-          pagination: { nextPageToken: string | null };
         };
-        loaded.push(
-          ...payload.data.filter((session) => session.status === "active"),
+        setSessions(
+          payload.data.filter((session) => session.status === "active"),
         );
-        pageToken = payload.pagination.nextPageToken;
-      } while (pageToken && !controller.signal.aborted);
-      if (controller.signal.aborted) return;
-      setSessions(loaded);
-      const titled = await Promise.all(
-        loaded.slice(0, 50).map(async (session) => {
-          if (localStorage.getItem(`forty-two-session-title:${session.id}`))
-            return session;
-          const response = await fetch(
-            `/api/chat/sessions/${session.id}/turns?limit=25`,
-            { cache: "no-store", signal: controller.signal },
-          );
-          if (!response.ok) return session;
-          const title = turnTitle(await response.json());
-          if (title)
-            localStorage.setItem(
-              `forty-two-session-title:${session.id}`,
-              title,
-            );
-          return title ? { ...session, title } : session;
-        }),
-      );
-      if (!controller.signal.aborted) setSessions(titled);
-    })().catch(() => undefined);
-    return () => controller.abort();
-  }, [pathname]);
+      } catch {
+        // Keep the last successful sidebar state when refresh fails.
+      }
+    };
+    void loadSessions();
+    window.addEventListener("forty-two:sessions-changed", loadSessions);
+    return () => {
+      controller?.abort();
+      window.removeEventListener("forty-two:sessions-changed", loadSessions);
+    };
+  }, []);
 
   const navigation = useMemo<readonly ApplicationNavigationSection[]>(
     () => [

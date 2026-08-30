@@ -1,4 +1,4 @@
-import { and, desc, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 
 import { getDatabase } from "../../database.js";
@@ -8,6 +8,7 @@ import {
   DataSourceTypeSchema,
   type DataSource,
 } from "../../types.js";
+import { DataSourceIdSchema } from "../../ids.js";
 import { parseDataSource } from "./shared.js";
 
 export const ListDataSourcesInputSchema = z.object({
@@ -19,7 +20,11 @@ export const ListDataSourcesInputSchema = z.object({
     .array(z.enum(["awaiting_upload", "testing", "ready", "failed"]))
     .max(4)
     .optional(),
-  limit: z.number().int().min(1).max(100).optional().default(50),
+  before: z
+    .object({ createdAt: z.date(), id: DataSourceIdSchema })
+    .strict()
+    .optional(),
+  limit: z.number().int().min(1).max(101).optional().default(50),
 });
 
 export type ListDataSourcesInput = z.input<typeof ListDataSourcesInputSchema>;
@@ -44,6 +49,15 @@ export async function listDataSources(
           : undefined,
         parsed.statuses
           ? inArray(dataSources.status, parsed.statuses)
+          : undefined,
+        parsed.before
+          ? or(
+              lt(dataSources.createdAt, parsed.before.createdAt),
+              and(
+                eq(dataSources.createdAt, parsed.before.createdAt),
+                lt(dataSources.id, parsed.before.id),
+              ),
+            )
           : undefined,
       ),
     )
