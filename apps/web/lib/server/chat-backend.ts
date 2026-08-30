@@ -92,6 +92,8 @@ export async function createApplicationSession(request: Request): Promise<{
   });
 
   if (!result.created) {
+    const settled = settledExistingApplicationSession(result.chatSession);
+    if (settled) return applicationSessionResponse(settled);
     const ready = await waitForApplicationSession(result.chatSession.id);
     return applicationSessionResponse(ready);
   }
@@ -122,6 +124,22 @@ export async function createApplicationSession(request: Request): Promise<{
     }
     throw error;
   }
+}
+
+export function settledExistingApplicationSession(
+  session: ChatSession,
+): ChatSession | undefined {
+  if (session.status === "active") return session;
+  if (session.status === "failed") {
+    throw new Error("Idempotent chat session creation previously failed.");
+  }
+  if (session.status === "deleted" || session.deletedAt) {
+    throw new ApiInputError(
+      "Idempotency-Key belongs to a deleted chat session.",
+      409,
+    );
+  }
+  return undefined;
 }
 
 export async function applicationSession(
@@ -328,9 +346,7 @@ async function waitForApplicationSession(id: string): Promise<ChatSession> {
   while (Date.now() < deadline) {
     const session = await getChatSession({ chatSessionId: id });
     if (session?.status === "active") return session;
-    if (session?.status === "failed") {
-      throw new Error("Idempotent chat session creation previously failed.");
-    }
+    if (session) settledExistingApplicationSession(session);
     await delay(100);
   }
   throw new Error("Timed out waiting for idempotent chat session creation.");

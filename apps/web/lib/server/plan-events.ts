@@ -84,17 +84,16 @@ export function normalizePlanEvent(
   }
 
   if (event.type === "tool.approval_required") {
-    return event.toolCalls.flatMap(({ id: toolCallId }) =>
-      state.pending.has(toolCallId)
-        ? [
-            {
-              type: "plan.failed" as const,
-              toolCallId,
-              message: "The plan tool unexpectedly required approval.",
-            },
-          ]
-        : [],
-    );
+    return event.toolCalls.flatMap(({ id: toolCallId }) => {
+      if (!state.pending.delete(toolCallId)) return [];
+      return [
+        {
+          type: "plan.failed" as const,
+          toolCallId,
+          message: "The plan tool unexpectedly required approval.",
+        },
+      ];
+    });
   }
   return [];
 }

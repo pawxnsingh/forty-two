@@ -11,6 +11,7 @@ import {
   deleteSessionResources,
   readTurnInput,
   runApprovalContinuationOnce,
+  settledExistingApplicationSession,
   sqlApplyApprovalArguments,
   type ApplicationSessionCleanupDependencies,
   type TrueForgeSessionCleanupDependencies,
@@ -263,6 +264,33 @@ test("public session creation rejects raw AgentSpecs and connector names", async
         error.message === "Request body must contain only dataSourceIds.",
     );
   }
+});
+
+test("deleted idempotency winners fail immediately", () => {
+  const now = new Date();
+  const deleted: ChatSession = {
+    id: "sess_01HZX000000000000000000001",
+    trueforgeSessionId: "trueforge-session-deleted",
+    mcpServerName: null,
+    capabilityId: "capability-deleted",
+    capabilityExpiresAt: new Date(now.getTime() + 60_000),
+    capabilityRevokedAt: now,
+    idempotencyKey: "deleted-key",
+    idempotencyRequestHash: "a".repeat(64),
+    status: "deleted",
+    failureMessage: null,
+    plan: null,
+    planRevision: 0,
+    planUpdatedAt: null,
+    planQuestionKey: null,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: now,
+  };
+  assert.throws(
+    () => settledExistingApplicationSession(deleted),
+    (error: unknown) => error instanceof ApiInputError && error.status === 409,
+  );
 });
 
 test("cleanup retries after immediate durable revocation", async () => {

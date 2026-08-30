@@ -274,3 +274,34 @@ test("malformed Todo snapshots fail closed without throwing", () => {
     );
   }
 });
+
+test("approval-required plan calls fail once and leave pending state", () => {
+  const state = createPlanEventState();
+  normalizePlanEvent(planCall, state);
+  const failed = normalizePlanEvent(
+    {
+      type: "tool.approval_required",
+      id: "approval-1",
+      threadId: "main",
+      createdAt: "2026-08-28T00:00:00.500Z",
+      toolCalls: [{ id: "call-plan", sourceEventId: "event-1" }],
+    } as TrueForgeApi.ToolApprovalRequiredEvent,
+    state,
+  );
+  assert.equal(failed[0]?.type, "plan.failed");
+  assert.equal(state.pending.has("call-plan"), false);
+  assert.deepEqual(
+    normalizePlanEvent(
+      {
+        type: "tool.response",
+        id: "response-after-approval",
+        threadId: "main",
+        toolCallId: "call-plan",
+        createdAt: "2026-08-28T00:00:01.000Z",
+        content: JSON.stringify({ plan: null, revision: 1, updatedAt: null }),
+      },
+      state,
+    ),
+    [],
+  );
+});
