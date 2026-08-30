@@ -633,6 +633,7 @@ export class ArtifactStore {
     let acquired = false;
     let committed: AnalysisArtifact | undefined;
     let committedETag: string | undefined;
+    let releaseAttempted = false;
     try {
       await lease.acquireLease(-1);
       acquired = true;
@@ -694,21 +695,28 @@ export class ArtifactStore {
       await blob.getProperties({
         conditions: { ifMatch: properties.etag, leaseId },
       });
+      releaseAttempted = true;
       await lease.releaseLease();
       acquired = false;
       return response;
     } catch (error) {
       if (committed && committedETag) {
-        await this.repositories.markAnalysisArtifactLeaseLost({
-          artifactId: committed.id,
-          azureBlobName: name,
-          azureETag: committedETag,
-        });
-        throw new ArtifactLeaseLostError(error);
+        if (isAzureStatus(error, 412)) {
+          await this.repositories.markAnalysisArtifactLeaseLost({
+            artifactId: committed.id,
+            azureBlobName: name,
+            azureETag: committedETag,
+          });
+          throw new ArtifactLeaseLostError(error);
+        }
+        // The metadata commit is authoritative. A transient post-commit
+        // properties/release failure must not delete an otherwise valid
+        // artifact; an unreleased infinite lease is recovered by cleanup.
+        return receipt(committed);
       }
       throw error;
     } finally {
-      if (acquired) {
+      if (acquired && !releaseAttempted) {
         try {
           await lease.releaseLease();
         } catch {

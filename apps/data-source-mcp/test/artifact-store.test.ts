@@ -548,6 +548,71 @@ describe("Azure artifact upload descriptors", () => {
     assert.deepEqual(marked, [laterId]);
   });
 
+  it("preserves committed metadata across transient post-commit Azure failures", async () => {
+    const table = serializeCanonicalTableV1({
+      columns: [{ name: "value", type: "integer", nullable: false }],
+      rows: [{ value: 99 }],
+    });
+    for (const failure of ["properties", "release"] as const) {
+      const state = leaseBackedAzure(table.bytes);
+      if (failure === "properties") state.failPropertiesAt = 4;
+      else state.releaseErrorStatus = 503;
+      let invalidations = 0;
+      const resilientStore = new ArtifactStore(
+        {
+          accountName: "dummy42account",
+          accountKey: Buffer.alloc(32, 42).toString("base64"),
+          container: "dummy42",
+        },
+        state.service,
+        {
+          getReadyAnalysisArtifacts: async () => [],
+          getAnalysisArtifact: async () => null,
+          listAnalysisArtifactParents: async () => [],
+          commitTableArtifact: (async (
+            input: Record<string, unknown>,
+            hooks: { beforeTransactionCommit?: () => Promise<void> },
+          ) => {
+            await hooks.beforeTransactionCommit?.();
+            return artifactFromCommit(input);
+          }) as never,
+          markAnalysisArtifactLeaseLost: async () => {
+            invalidations += 1;
+            return true;
+          },
+        },
+      );
+      const begin = await resilientStore.beginTableUpload({
+        chatSessionId: "sess_01HZX000000000000000000001",
+        request: {
+          contentSha256: table.contentSha256,
+          byteSize: table.byteSize,
+          rowCount: table.rowCount,
+          columns: table.columns,
+          parentArtifactIds: [],
+          sourceReferences: [],
+        },
+      });
+      state.name = new URL(begin.upload.url).pathname
+        .split("/")
+        .slice(2)
+        .map(decodeURIComponent)
+        .join("/");
+      const receipt = await resilientStore.finalizeTable({
+        chatSessionId: "sess_01HZX000000000000000000001",
+        request: {
+          artifactId: begin.artifactId,
+          contentSha256: table.contentSha256,
+          parentArtifactIds: [],
+          sourceReferences: [],
+        },
+      });
+      assert.equal(receipt.artifactId, begin.artifactId);
+      assert.equal(invalidations, 0);
+      assert.equal(state.activeLease === undefined, failure === "properties");
+    }
+  });
+
   it("invalidates committed metadata when infinite lease ownership is lost before response", async () => {
     const table = serializeCanonicalTableV1({
       columns: [{ name: "value", type: "integer", nullable: false }],
@@ -776,6 +841,9 @@ function leaseBackedAzure(bytes: Buffer) {
     breakCalls: number;
     breakConditions: (string | undefined)[];
     releaseCalls: number;
+    propertiesCalls: number;
+    failPropertiesAt?: number;
+    releaseErrorStatus?: number;
     metadata: Record<string, string>;
     etag: string;
     lastModified: Date;
@@ -790,6 +858,7 @@ function leaseBackedAzure(bytes: Buffer) {
     breakCalls: 0,
     breakConditions: [],
     releaseCalls: 0,
+    propertiesCalls: 0,
     metadata: {},
     etag: '"etag-1"',
     lastModified: new Date("2026-08-20T00:00:00.000Z"),
@@ -857,6 +926,9 @@ function leaseBackedAzure(bytes: Buffer) {
         async releaseLease() {
           expireLease();
           if (state.activeLease !== ownLease) throw azureError(412);
+          if (state.releaseErrorStatus !== undefined) {
+            throw azureError(state.releaseErrorStatus);
+          }
           state.releaseCalls += 1;
           state.activeLease = undefined;
           state.activeLeaseDuration = undefined;
@@ -885,6 +957,10 @@ function leaseBackedAzure(bytes: Buffer) {
     async getProperties(input?: {
       conditions?: { leaseId?: string; ifMatch?: string };
     }) {
+      state.propertiesCalls += 1;
+      if (state.propertiesCalls === state.failPropertiesAt) {
+        throw azureError(503);
+      }
       expireLease();
       if (state.deleted) throw azureError(404);
       if (input?.conditions?.leaseId !== undefined) {
