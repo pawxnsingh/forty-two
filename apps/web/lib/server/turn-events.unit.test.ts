@@ -1026,6 +1026,33 @@ test("cancelling the browser stream closes the upstream iterator", async () => {
   assert.equal(returned, true);
 });
 
+test("a replay cursor at the terminal frame closes without waiting upstream", async () => {
+  let returned = false;
+  const source: AsyncIterable<
+    UpstreamServerSentEvent<TrueForgeApi.TurnStreamingEvent>
+  > = {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async () => ({
+          done: false,
+          value: { id: "42", data: turnDone() },
+        }),
+        return: async () => {
+          returned = true;
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+  const text = await new Response(
+    createNormalizedTurnEventStream(source, {
+      resume: { sequenceNumber: 42, eventIndex: Number.MAX_SAFE_INTEGER },
+    }),
+  ).text();
+  assert.equal(text, "");
+  assert.equal(returned, true);
+});
+
 test("next and abort errors always close the upstream iterator", async () => {
   for (const aborted of [false, true]) {
     let returned = false;

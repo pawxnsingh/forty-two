@@ -116,13 +116,17 @@ export function createNormalizedTurnEventStream(
             return;
           }
           const frames = encodeSourceEvent(next.value, state, options.resume);
-          if (frames.length === 0) continue;
-          controller.enqueue(encoder.encode(frames.join("")));
-          if (next.value.data.type === "turn.done") {
+          const terminal = next.value.data.type === "turn.done";
+          if (frames.length > 0) {
+            controller.enqueue(encoder.encode(frames.join("")));
+          }
+          if (terminal) {
             finished = true;
             await closeIteratorAfterSuccess();
             controller.close();
+            return;
           }
+          if (frames.length === 0) continue;
           return;
         }
       } catch (error) {

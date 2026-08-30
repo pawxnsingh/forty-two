@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ChatSession } from "@forty-two/db";
+import { TrueForgeError } from "@truefoundry/trueforge-sdk";
 
 import {
   ApiInputError,
@@ -9,6 +10,7 @@ import {
   deleteApplicationSession,
   deleteSessionResources,
   readTurnInput,
+  runApprovalContinuationOnce,
   sqlApplyApprovalArguments,
   type ApplicationSessionCleanupDependencies,
   type TrueForgeSessionCleanupDependencies,
@@ -170,6 +172,31 @@ test("approval provenance accepts only direct or exact scoped apply calls", () =
       ApiInputError,
     );
   }
+});
+
+test("concurrent approval continuations share one side effect and reject decision drift", async () => {
+  let calls = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const create = async () => {
+    calls += 1;
+    await blocked;
+    return { data: { id: "turn-resumed" } } as unknown as Awaited<
+      ReturnType<typeof runApprovalContinuationOnce>
+    >;
+  };
+  const key = `approval-test-${Date.now()}`;
+  const first = runApprovalContinuationOnce(key, "allow:", create);
+  const retry = runApprovalContinuationOnce(key, "allow:", create);
+  assert.throws(
+    () => runApprovalContinuationOnce(key, "deny:no", create),
+    /another decision/,
+  );
+  release();
+  assert.equal(await first, await retry);
+  assert.equal(calls, 1);
 });
 
 test("turns accept JSON messages only", async () => {
@@ -360,5 +387,33 @@ test("runtime cleanup retains a session when sandbox enumeration fails", async (
       ),
   );
   assert.equal(eventAttempts, 3);
+  assert.equal(trueforgeDeletes, 0);
+});
+
+test("runtime cleanup does not equate a missing session with deleted sandboxes", async () => {
+  let listedTurns = 0;
+  let trueforgeDeletes = 0;
+  const missing = new TrueForgeError({ message: "missing", statusCode: 404 });
+  const dependencies: TrueForgeSessionCleanupDependencies = {
+    cancelSession: async () => {
+      throw missing;
+    },
+    listTurns: async () => {
+      listedTurns += 1;
+      throw missing;
+    },
+    listEvents: async () => [],
+    deleteDaytonaSandbox: async () => undefined,
+    deleteTrueForgeSession: async () => {
+      trueforgeDeletes += 1;
+    },
+    wait: async () => undefined,
+  };
+
+  await assert.rejects(
+    deleteSessionResources("trueforge-missing", dependencies),
+    /Session cleanup was incomplete/,
+  );
+  assert.equal(listedTurns, 1);
   assert.equal(trueforgeDeletes, 0);
 });

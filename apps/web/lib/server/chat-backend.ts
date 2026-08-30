@@ -31,6 +31,16 @@ const TERMINAL_TURN_STATES = new Set(["done", "error", "cancelled"]);
 export const SHARED_DATA_SOURCE_MCP_NAME = "forty-two-data-source";
 
 let client: TrueForge | undefined;
+const approvalContinuations = new Map<
+  string,
+  {
+    identity: string;
+    promise: Promise<TrueForgeApi.GetTurnResponse>;
+    expiresAt: number;
+  }
+>();
+const APPROVAL_CONTINUATION_TTL_MS = 10 * 60_000;
+const MAX_APPROVAL_CONTINUATIONS = 1_000;
 
 export class ApiInputError extends Error {
   readonly status: number;
@@ -483,45 +493,89 @@ export async function resolveSqlChangeApproval(
     );
   }
 
-  if (decision === "allow") {
-    await recordSqlChangeApproval({
-      changeSetId: argumentsValue.changeSetId,
-      chatSessionId: session.id,
-      trueforgeTurnId,
-      trueforgeToolCallId: toolCallId,
-      decision,
-    });
-  }
-  const resumed = await trueForgeClient().sessions.createTurn(
-    runtimeSessionId,
-    {
-      previousTurnId: trueforgeTurnId,
-      input: [
+  return runApprovalContinuationOnce(
+    `${runtimeSessionId}:${trueforgeTurnId}:${toolCallId}`,
+    `${decision}:${reason?.trim() ?? ""}`,
+    async () => {
+      if (decision === "allow") {
+        await recordSqlChangeApproval({
+          changeSetId: argumentsValue.changeSetId as string,
+          chatSessionId: session.id,
+          trueforgeTurnId,
+          trueforgeToolCallId: toolCallId,
+          decision,
+        });
+      }
+      const resumed = await trueForgeClient().sessions.createTurn(
+        runtimeSessionId,
         {
-          type: "user.tool_approval",
-          threadId: approvalEvent.threadId,
-          toolCallId,
-          approval:
-            decision === "allow"
-              ? { status: "allow" }
-              : {
-                  status: "deny",
-                  ...(reason ? { reason: reason.trim() } : {}),
-                },
+          previousTurnId: trueforgeTurnId,
+          input: [
+            {
+              type: "user.tool_approval",
+              threadId: approvalEvent.threadId,
+              toolCallId,
+              approval:
+                decision === "allow"
+                  ? { status: "allow" }
+                  : {
+                      status: "deny",
+                      ...(reason ? { reason: reason.trim() } : {}),
+                    },
+            },
+          ],
         },
-      ],
+      );
+      if (decision === "deny") {
+        await recordSqlChangeApproval({
+          changeSetId: argumentsValue.changeSetId as string,
+          chatSessionId: session.id,
+          trueforgeTurnId,
+          trueforgeToolCallId: toolCallId,
+          decision,
+        });
+      }
+      return resumed;
     },
   );
-  if (decision === "deny") {
-    await recordSqlChangeApproval({
-      changeSetId: argumentsValue.changeSetId,
-      chatSessionId: session.id,
-      trueforgeTurnId,
-      trueforgeToolCallId: toolCallId,
-      decision,
-    });
+}
+
+export function runApprovalContinuationOnce(
+  key: string,
+  identity: string,
+  create: () => Promise<TrueForgeApi.GetTurnResponse>,
+): Promise<TrueForgeApi.GetTurnResponse> {
+  const now = Date.now();
+  for (const [storedKey, stored] of approvalContinuations) {
+    if (stored.expiresAt <= now) approvalContinuations.delete(storedKey);
   }
-  return resumed;
+  const existing = approvalContinuations.get(key);
+  if (existing) {
+    if (existing.identity !== identity) {
+      throw new ApiInputError(
+        "SQL change approval is already resolving with another decision.",
+        409,
+      );
+    }
+    return existing.promise;
+  }
+  const promise = Promise.resolve().then(create);
+  approvalContinuations.set(key, {
+    identity,
+    promise,
+    expiresAt: now + APPROVAL_CONTINUATION_TTL_MS,
+  });
+  void promise.catch(() => {
+    if (approvalContinuations.get(key)?.promise === promise) {
+      approvalContinuations.delete(key);
+    }
+  });
+  while (approvalContinuations.size > MAX_APPROVAL_CONTINUATIONS) {
+    const oldest = approvalContinuations.keys().next().value;
+    if (typeof oldest !== "string") break;
+    approvalContinuations.delete(oldest);
+  }
+  return promise;
 }
 
 export function sqlApplyApprovalArguments(
@@ -672,7 +726,10 @@ export async function waitForTurn(
     const requestController = new AbortController();
     const abortFromCaller = () => requestController.abort(signal?.reason);
     signal?.addEventListener("abort", abortFromCaller, { once: true });
-    const deadlineTimer = setTimeout(() => requestController.abort(), remaining);
+    const deadlineTimer = setTimeout(
+      () => requestController.abort(),
+      remaining,
+    );
     let turn: TrueForgeApi.Turn;
     try {
       turn = (
@@ -725,16 +782,27 @@ export async function deleteSessionResources(
   try {
     await dependencies.cancelSession(sessionId);
   } catch (error) {
-    if (isSdkStatus(error, 404)) return;
-    if (!isSdkStatus(error, 412)) failures.push(asError(error));
+    if (isSdkStatus(error, 404)) {
+      failures.push(
+        new Error(
+          `TrueForge session ${sessionId} is missing; sandbox disposition is unknown.`,
+        ),
+      );
+    } else if (!isSdkStatus(error, 412)) failures.push(asError(error));
   }
 
   let turns: ReadonlyArray<{ id: string }> = [];
   try {
     turns = await dependencies.listTurns(sessionId);
   } catch (error) {
-    if (isSdkStatus(error, 404)) return;
-    failures.push(asError(error));
+    if (
+      !isSdkStatus(error, 404) ||
+      !failures.some((failure) =>
+        failure.message.includes("sandbox disposition is unknown"),
+      )
+    ) {
+      failures.push(asError(error));
+    }
   }
 
   let eventItems: TrueForgeApi.SessionEventItem[] = [];

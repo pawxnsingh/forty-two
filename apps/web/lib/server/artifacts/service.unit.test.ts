@@ -5,7 +5,11 @@ import { serializeCanonicalTableV1 } from "@forty-two/artifacts";
 import { AnalysisArtifactSchema } from "@forty-two/db";
 import { ChartArtifactEnvelopeV1Schema } from "@repo/charting/server";
 
-import { buildChartEnvelope } from "./service";
+import {
+  ArtifactApiError,
+  buildChartEnvelope,
+  mapArtifactBlobReadError,
+} from "./service";
 
 const now = new Date("2026-08-28T00:00:00.000Z");
 const sourceId = "art_01ARZ3NDEKTSV4RRFFQ69G5FAA";
@@ -116,6 +120,30 @@ describe("artifact API chart envelope", () => {
           table,
         }),
       /no longer matches/,
+    );
+  });
+});
+
+describe("artifact blob reads", () => {
+  for (const statusCode of [404, 412, 416]) {
+    it(`maps Azure ${statusCode} to a committed-payload conflict`, () => {
+      assert.throws(
+        () => mapArtifactBlobReadError({ statusCode }),
+        (error: unknown) =>
+          error instanceof ArtifactApiError &&
+          error.status === 409 &&
+          error.code === "ARTIFACT_PAYLOAD_CONFLICT",
+      );
+    });
+  }
+
+  it("preserves unexpected infrastructure failures", () => {
+    const failure = Object.assign(new Error("Azure unavailable"), {
+      statusCode: 503,
+    });
+    assert.throws(
+      () => mapArtifactBlobReadError(failure),
+      (error) => Object.is(error, failure),
     );
   });
 });

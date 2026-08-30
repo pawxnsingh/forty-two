@@ -21,7 +21,10 @@ import {
 } from "@repo/charting/server";
 import { z } from "zod";
 
-import { downloadBlobToBuffer } from "../data-sources/azure-storage";
+import {
+  downloadBlobToBuffer,
+  getAzureStatusCode,
+} from "../data-sources/azure-storage";
 import { readFileDataSourceServerConfig } from "../data-sources/config";
 
 let databaseReadyPromise: Promise<void> | undefined;
@@ -67,6 +70,18 @@ function ids(sessionId: string, artifactId?: string) {
 
 const artifactNotFound = () =>
   new ArtifactApiError(404, "ARTIFACT_NOT_FOUND", "Artifact not found.");
+
+export function mapArtifactBlobReadError(error: unknown): never {
+  const status = getAzureStatusCode(error);
+  if (status === 404 || status === 412 || status === 416) {
+    throw new ArtifactApiError(
+      409,
+      "ARTIFACT_PAYLOAD_CONFLICT",
+      "Artifact payload no longer matches its committed metadata.",
+    );
+  }
+  throw error;
+}
 
 export async function authorizeArtifactRequest(
   request: Request,
@@ -201,12 +216,17 @@ async function downloadTable(
     );
   }
   const config = readFileDataSourceServerConfig();
-  const bytes = await downloadBlobToBuffer({
-    config,
-    blobName: artifact.azureBlobName,
-    expectedSizeBytes: artifact.byteSize,
-    ifMatch: artifact.azureETag,
-  });
+  let bytes: Buffer;
+  try {
+    bytes = await downloadBlobToBuffer({
+      config,
+      blobName: artifact.azureBlobName,
+      expectedSizeBytes: artifact.byteSize,
+      ifMatch: artifact.azureETag,
+    });
+  } catch (error) {
+    mapArtifactBlobReadError(error);
+  }
   try {
     return parseCanonicalTableV1(bytes, {
       contentSha256: artifact.contentSha256,
