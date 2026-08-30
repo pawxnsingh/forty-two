@@ -8,10 +8,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint --max-warnings 0",
-    "check-types": "next typegen && tsc --noEmit"
+    "check-types": "next typegen && tsc --noEmit",
+    "test": "pnpm test:chat-backend",
+    "test:chat-backend": "node --import tsx --test lib/server/chat-backend.unit.test.ts"
   },
   "dependencies": {
     "@repo/ui": "workspace:*",
+    "@truefoundry/trueforge-sdk": "0.1.3",
     "next": "16.3.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
@@ -23,6 +26,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
     "eslint": "^9.39.1",
+    "tsx": "^4.23.12",
     "typescript": "5.9.3"
   }
 }

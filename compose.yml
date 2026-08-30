@@ -169,6 +169,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-forty_two}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-forty_two}
       TRUEFORGE_INTERNAL_URL: http://trueforge:8790
       NEXT_PUBLIC_TRUEFORGE_URL: ${TRUEFORGE_PUBLIC_BASE_URL:-http://localhost:8790}
+      FORTY_TWO_AGENT_NAME: ${FORTY_TWO_AGENT_NAME:-forty-two-data-agent}
+      DAYTONA_API_URL: ${DAYTONA_API_URL:-https://app.daytona.io/api}
+      DAYTONA_API_KEY: ${DAYTONA_API_KEY:?Set DAYTONA_API_KEY in .env}
       WATCHPACK_POLLING: "true"
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"

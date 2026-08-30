@@ -94,6 +94,9 @@ importers:
       '@repo/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@truefoundry/trueforge-sdk':
+        specifier: 0.1.3
+        version: 0.1.3
       next:
         specifier: 16.3.2
         version: 16.3.2(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -122,6 +125,9 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -985,6 +991,10 @@ packages:
 
   '@tediousjs/connection-string@0.5.0':
     resolution: {integrity: sha512-7qSgZbincDDDFyRweCIEvZULFAw5iz/DeunhvuxpL31nfntX3P4Yd4HkHBRg9H8CdqY1e5WFN1PZIz/REL9MVQ==}
+
+  '@truefoundry/trueforge-sdk@0.1.3':
+    resolution: {integrity: sha512-YW1I8CWOoDzIqhl8PEZYUnahibSdIlo0IPXX5A3zNT1QBSscn/jGutzB90jqgWQrPr8HKZcDF5KthnG4hmUtXA==}
+    engines: {node: '>=22'}
 
   '@turbo/darwin-64@2.10.11':
     resolution: {integrity: sha512-v3R+1R/Ysozyo+p7Ri8MCIbndOvYt3DgPFrGLhrhQHfvyvbxyH3WyJj+A/2JTNmNleuAlh3JUyCV0iSVHIONTA==}
@@ -3819,6 +3829,8 @@ snapshots:
       simple-lru-cache: 0.0.2
 
   '@tediousjs/connection-string@0.5.0': {}
+
+  '@truefoundry/trueforge-sdk@0.1.3': {}
 
   '@turbo/darwin-64@2.10.11':
     optional: true
