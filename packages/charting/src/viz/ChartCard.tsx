@@ -75,6 +75,32 @@ const EXPORT_ACCENT = "#4d55a5"; // brand accent
 // rather than the narrow in-app 18-char truncation. ChartJSTheme's tick callback reads this
 // global live (the same hook the PDF print view uses); it's restored after each capture.
 const EXPORT_AXIS_LABEL_MAX_CHARS = 100;
+let exportAxisLabelLeases = 0;
+
+function acquireExportAxisLabels() {
+  exportAxisLabelLeases += 1;
+  (window as unknown as { __axisLabelMaxChars?: number }).__axisLabelMaxChars =
+    EXPORT_AXIS_LABEL_MAX_CHARS;
+}
+
+function releaseExportAxisLabels() {
+  exportAxisLabelLeases = Math.max(0, exportAxisLabelLeases - 1);
+  if (exportAxisLabelLeases === 0) {
+    (window as unknown as { __axisLabelMaxChars?: number }).__axisLabelMaxChars =
+      undefined;
+  }
+}
+
+function tableCell(value: unknown, format?: Partial<ColumnLabelFormat>) {
+  if (typeof value === "object" && value !== null && !(value instanceof Date)) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[Unserializable value]";
+    }
+  }
+  return formatLabel(value as string | number | Date | null, format);
+}
 
 /**
  * Table view — the SAME Excel-style table used by chat result artifacts
@@ -98,12 +124,7 @@ function useExcelTableData(
   const tableRows = useMemo(
     () =>
       rows.map((row) =>
-        keys.map((c) =>
-          formatLabel(
-            row[c] as string | number | Date | null,
-            columnLabelFormats[c],
-          ),
-        ),
+        keys.map((c) => tableCell(row[c], columnLabelFormats[c])),
       ),
     [rows, keys, columnLabelFormats],
   );
@@ -188,6 +209,7 @@ export default function ChartCard({
   const exportRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>("chart");
   const [exporting, setExporting] = useState(false);
+  const ownsExportAxisLabels = useRef(false);
   const [expanded, setExpanded] = useState(false);
 
   // Close the expand modal on Escape, and lock body scroll while it's open.
@@ -216,9 +238,9 @@ export default function ChartCard({
     if (!exporting) return;
     let cancelled = false;
     const restoreAxisLabels = () => {
-      (
-        window as unknown as { __axisLabelMaxChars?: number }
-      ).__axisLabelMaxChars = undefined;
+      if (!ownsExportAxisLabels.current) return;
+      ownsExportAxisLabels.current = false;
+      releaseExportAxisLabels();
     };
     const timer = setTimeout(async () => {
       const card = exportRef.current?.firstElementChild as HTMLElement | null;
@@ -264,6 +286,16 @@ export default function ChartCard({
     };
   }, [exporting, fileBase]);
 
+  useEffect(
+    () => () => {
+      if (ownsExportAxisLabels.current) {
+        ownsExportAxisLabels.current = false;
+        releaseExportAxisLabels();
+      }
+    },
+    [],
+  );
+
   const columnLabelFormats = (
     config.columnLabelFormats && typeof config.columnLabelFormats === "object"
       ? config.columnLabelFormats
@@ -296,9 +328,10 @@ export default function ChartCard({
   const downloadPng = () => {
     if (!cardRef.current?.querySelector("canvas")) return; // only in chart view, once the chart exists
     // Widen category-axis labels before the offscreen export chart mounts so it draws them in full.
-    (
-      window as unknown as { __axisLabelMaxChars?: number }
-    ).__axisLabelMaxChars = EXPORT_AXIS_LABEL_MAX_CHARS;
+    if (!ownsExportAxisLabels.current) {
+      ownsExportAxisLabels.current = true;
+      acquireExportAxisLabels();
+    }
     setExporting(true);
   };
 

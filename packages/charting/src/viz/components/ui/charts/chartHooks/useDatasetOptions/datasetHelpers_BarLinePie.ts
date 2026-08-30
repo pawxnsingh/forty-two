@@ -5,8 +5,7 @@ import type { ChartProps } from '../../Chart.types';
 export const sortLineBarData = (
   data: NonNullable<ChartProps['data']>,
   columnMetadata: NonNullable<ChartProps['columnMetadata']>,
-  xFieldSorts: string[],
-  xFields: string[]
+  xFieldSorts: string[]
 ) => {
   if (xFieldSorts.length === 0) return data;
 
@@ -22,7 +21,7 @@ export const sortLineBarData = (
   if (xFieldSorts.length > 0) {
     sortedData.sort((a, b) => {
       for (let i = 0; i < xFieldSorts.length; i++) {
-        const field = xFields[i] ?? '';
+        const field = xFieldSorts[i] ?? '';
         const fieldType: SimplifiedColumnType = columnMetadataRecord[field]?.simple_type || 'text';
 
         //NUMBER CASE
