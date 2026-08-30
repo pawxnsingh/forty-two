@@ -936,7 +936,18 @@ export function ChatWorkspace({
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadSources(controller.signal).catch(() => undefined);
+    setSources([]);
+    setSelectedSourceIds([]);
+    void loadSources(controller.signal).catch((loadError: unknown) => {
+      if (controller.signal.aborted) return;
+      setSources([]);
+      setSelectedSourceIds([]);
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Data sources are unavailable.",
+      );
+    });
     return () => controller.abort();
   }, [loadSources]);
 
